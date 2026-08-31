@@ -1,0 +1,58 @@
+version: '3'
+
+vars:
+  HOME_ASSISTANT_VERSION: '2026.8.3'
+  RUFF_VERSION: '0.16.5'
+  COMMITLINT_VERSION: '21.2.2'
+  COMMITLINT_IMAGE: 'node@sha256:9f94d34c787165dca03b74e5bf9c3bf90e8de79b19aa3d87fe1fa1694bf75c89'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  test:
+    desc: Run protocol and emulator contracts in the pinned Home Assistant image
+    preconditions:
+      - sh: command -v docker >/dev/null
+        msg: Install Docker before running the contract tests.
+    cmds:
+      - >-
+        docker run --rm
+        -v "{{.ROOT_DIR}}:/work:ro"
+        -w /work
+        -e PYTHONPATH=/work
+        "homeassistant/home-assistant:{{.HOME_ASSISTANT_VERSION}}"
+        python -m unittest discover -s tests/domus40 -v
+
+  lint:
+    desc: Lint the integration, tests, and emulator
+    preconditions:
+      - sh: command -v uv >/dev/null
+        msg: Install uv before running Ruff.
+    cmds:
+      - uvx "ruff=={{.RUFF_VERSION}}" check custom_components tests domus40_emulator
+
+  commits:
+    desc: Validate the latest commit with Conventional Commits
+    preconditions:
+      - sh: command -v docker >/dev/null
+        msg: Install Docker before validating commit messages.
+    cmds:
+      - >-
+        docker run --rm
+        -v "{{.ROOT_DIR}}:/work:ro"
+        -w /work
+        "{{.COMMITLINT_IMAGE}}"
+        sh -c 'git config --global --add safe.directory /work &&
+        npm exec --yes
+        --package=@commitlint/cli@{{.COMMITLINT_VERSION}}
+        --package=@commitlint/config-conventional@{{.COMMITLINT_VERSION}}
+        -- commitlint --extends @commitlint/config-conventional --last --verbose'
+
+  check:
+    desc: Run all integration checks
+    cmds:
+      - task: test
+      - task: lint
+      - task: commits

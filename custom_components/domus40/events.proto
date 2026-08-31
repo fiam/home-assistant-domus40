@@ -1,0 +1,33 @@
+syntax = "proto2";
+
+import "common_header.proto";
+import "constants.proto";
+
+// Private EFAPEL protocol revision domus40-events-v4. These field contracts
+// were verified against the authenticated Home Server schema on 2026-08-30.
+message DeviceStateEvent {
+  required MessageInfo info = 1;
+  required int64 deviceId = 2;
+
+  optional DeviceEndpoint endpoint = 100 [default = NoValue];
+  optional ButtonState buttonState = 101;
+
+  optional RegulatorState energyChangeState = 200;
+  optional uint32 energyLevel = 201;
+
+  optional uint32 timeActive = 301;
+}
+
+message DeviceInstantReadingEvent {
+  required MessageInfo info = 1;
+  required int64 deviceId = 2;
+
+  optional int64 powerMeasured_mA = 10;
+  optional int32 powerFactor = 11;
+  optional int64 consumed_mW = 12;
+  optional int32 voltage_V = 13;
+
+  optional double temperature = 20;
+  optional double externalTemperature = 21;
+  optional int32 luminance = 22;
+}

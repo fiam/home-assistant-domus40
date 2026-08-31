@@ -1,0 +1,4 @@
+default_config:
+
+logger:
+  default: warning

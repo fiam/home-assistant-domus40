@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.log
+
+# Never commit reverse-engineering inputs or live captures.
+*.apk
+*.xapk
+captures/
+.domus40-re/

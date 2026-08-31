@@ -1,0 +1,72 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to an EFAPEL Domus40 Home Server",
+        "description": "The Home Server was discovered automatically on the local network. Enter an existing administrator account.",
+        "data": {
+          "server": "Home Server",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "manual": {
+        "title": "Connect to an EFAPEL Domus40 Home Server",
+        "description": "Automatic discovery is unavailable. Enter the Home Server's LAN address and an existing administrator account.",
+        "data": {
+          "host": "Home Server address",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "confirm": {
+        "title": "Connect to {name}",
+        "description": "Enter an existing Domus40 administrator account for {name}.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate EFAPEL Domus40",
+        "description": "Enter the current Home Server administrator credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the Home Server.",
+      "invalid_host": "Enter an IPv4 address, IPv6 address, or hostname, optionally followed by a port.",
+      "invalid_auth": "The Home Server rejected these credentials.",
+      "unknown": "Unexpected error. Check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This Home Server is already configured.",
+      "cannot_connect": "The discovered Home Server has no usable address.",
+      "no_devices_found": "No EFAPEL Domus40 Home Server was discovered on this network.",
+      "not_domus40": "The discovered UPnP device is not a Domus40 Home Server.",
+      "reauth_successful": "Reauthentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Identification and protocol diagnostics",
+        "description": "Choose how long devices blink. Unknown-message monitoring temporarily observes all Home Server MQTT topics but stores only redacted topic shapes and protobuf field/wire signatures in diagnostics; raw topics and payloads are never logged.",
+        "data": {
+          "identify_duration_seconds": "Blink duration (seconds)",
+          "monitor_unknown_messages": "Monitor unknown MQTT messages"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "refresh_inventory": {
+        "name": "Refresh inventory and mappings"
+      }
+    }
+  }
+}

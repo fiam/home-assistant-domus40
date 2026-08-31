@@ -1,0 +1,108 @@
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate commit messages
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          COMMITLINT_IMAGE: node@sha256:9f94d34c787165dca03b74e5bf9c3bf90e8de79b19aa3d87fe1fa1694bf75c89
+          COMMITLINT_VERSION: 21.2.2
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            from_sha="$PR_BASE_SHA"
+          elif [[ -n "$BEFORE_SHA" ]] &&
+               [[ ! "$BEFORE_SHA" =~ ^0+$ ]] &&
+               git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            from_sha="$BEFORE_SHA"
+          else
+            from_sha=""
+          fi
+
+          if [[ -n "$from_sha" ]]; then
+            docker run --rm \
+              -e COMMITLINT_FROM="$from_sha" \
+              -e COMMITLINT_TO="$HEAD_SHA" \
+              -e COMMITLINT_VERSION \
+              -v "$GITHUB_WORKSPACE:/work:ro" \
+              -w /work \
+              "$COMMITLINT_IMAGE" \
+              sh -c 'git config --global --add safe.directory /work && npm exec --yes --package=@commitlint/cli@"$COMMITLINT_VERSION" --package=@commitlint/config-conventional@"$COMMITLINT_VERSION" -- commitlint --extends @commitlint/config-conventional --from "$COMMITLINT_FROM" --to "$COMMITLINT_TO" --verbose'
+          else
+            git log -1 --format=%B "$HEAD_SHA" | docker run --rm -i \
+              -e COMMITLINT_VERSION \
+              "$COMMITLINT_IMAGE" \
+              sh -c 'npm exec --yes --package=@commitlint/cli@"$COMMITLINT_VERSION" --package=@commitlint/config-conventional@"$COMMITLINT_VERSION" -- commitlint --extends @commitlint/config-conventional --verbose'
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Lint
+        run: uvx ruff==0.16.5 check custom_components tests domus40_emulator
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test against Home Assistant 2026.8.3
+        run: >-
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/work:ro"
+          -w /work
+          -e PYTHONPATH=/work
+          homeassistant/home-assistant:2026.8.3
+          python -m unittest discover -s tests/domus40 -v
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate with hassfest
+        uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # master
+
+  hacs:
+    # The HACS validator fetches repository files from unauthenticated
+    # raw.githubusercontent.com URLs, which cannot read private repositories.
+    # Keep the check ready for the repository becoming public.
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate with HACS
+        uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
+        with:
+          category: integration

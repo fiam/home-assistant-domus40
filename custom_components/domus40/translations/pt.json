@@ -1,0 +1,72 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ligar a um Home Server EFAPEL Domus40",
+        "description": "O Home Server foi descoberto automaticamente na rede local. Introduza uma conta de administrador existente.",
+        "data": {
+          "server": "Home Server",
+          "username": "Utilizador",
+          "password": "Palavra-passe"
+        }
+      },
+      "manual": {
+        "title": "Ligar a um Home Server EFAPEL Domus40",
+        "description": "A descoberta automática não está disponível. Introduza o endereço LAN do Home Server e uma conta de administrador existente.",
+        "data": {
+          "host": "Endereço do Home Server",
+          "username": "Utilizador",
+          "password": "Palavra-passe"
+        }
+      },
+      "confirm": {
+        "title": "Ligar a {name}",
+        "description": "Introduza uma conta de administrador Domus40 existente para {name}.",
+        "data": {
+          "username": "Utilizador",
+          "password": "Palavra-passe"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Voltar a autenticar EFAPEL Domus40",
+        "description": "Introduza as credenciais atuais de administrador do Home Server.",
+        "data": {
+          "username": "Utilizador",
+          "password": "Palavra-passe"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Não foi possível ligar ao Home Server.",
+      "invalid_host": "Introduza um endereço IPv4, IPv6 ou nome de host, opcionalmente seguido de uma porta.",
+      "invalid_auth": "O Home Server rejeitou estas credenciais.",
+      "unknown": "Erro inesperado. Consulte os registos do Home Assistant."
+    },
+    "abort": {
+      "already_configured": "Este Home Server já está configurado.",
+      "cannot_connect": "O Home Server descoberto não tem um endereço utilizável.",
+      "no_devices_found": "Não foi descoberto nenhum Home Server EFAPEL Domus40 nesta rede.",
+      "not_domus40": "O dispositivo UPnP descoberto não é um Home Server Domus40.",
+      "reauth_successful": "A nova autenticação foi concluída com sucesso."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Identificação e diagnóstico do protocolo",
+        "description": "Escolha durante quanto tempo os dispositivos piscam. A monitorização de mensagens desconhecidas observa temporariamente todos os tópicos MQTT do Home Server, mas guarda apenas formatos de tópicos anonimizados e assinaturas de campos/tipos protobuf nos diagnósticos; os tópicos e conteúdos originais nunca são registados.",
+        "data": {
+          "identify_duration_seconds": "Duração da intermitência (segundos)",
+          "monitor_unknown_messages": "Monitorizar mensagens MQTT desconhecidas"
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "refresh_inventory": {
+        "name": "Atualizar inventário e mapeamentos"
+      }
+    }
+  }
+}

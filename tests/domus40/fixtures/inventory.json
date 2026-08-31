@@ -1,0 +1,102 @@
+{
+  "areas": [
+    {
+      "id": 1,
+      "name": "Fixture floor"
+    }
+  ],
+  "divisions": [
+    {
+      "id": 10,
+      "name": "Fixture room",
+      "area": 1
+    }
+  ],
+  "devices": [
+    {
+      "id": 101,
+      "displayName": "Fixture dimmer",
+      "division": 10,
+      "switchedOn": false,
+      "capLevel": true,
+      "capOnOff": true,
+      "capMetering": true,
+      "capABCDButtons": false,
+      "capIRButtons": false,
+      "headerFilter": "Actuators",
+      "endpoint": "ReguladorDeLuz",
+      "levelPercentage": 73,
+      "type": "LightingRegulator",
+      "hardwareAddress": "00:11:22:33:44:01",
+      "firmwareVersion": "fixture-1"
+    },
+    {
+      "id": 102,
+      "displayName": "Fixture blind",
+      "division": 10,
+      "switchedOn": true,
+      "capLevel": true,
+      "capOnOff": true,
+      "capMetering": true,
+      "capABCDButtons": false,
+      "capIRButtons": false,
+      "headerFilter": "Actuators",
+      "endpoint": "ControladorDePersiana",
+      "levelPercentage": 45,
+      "type": "BlindsControl",
+      "hardwareAddress": "00:11:22:33:44:02",
+      "firmwareVersion": "fixture-1"
+    },
+    {
+      "id": 103,
+      "displayName": "Fixture outlet",
+      "division": 10,
+      "switchedOn": false,
+      "capLevel": false,
+      "capOnOff": true,
+      "capMetering": true,
+      "capABCDButtons": false,
+      "capIRButtons": false,
+      "headerFilter": "Actuators",
+      "endpoint": "AtuadorOnOffPlug",
+      "levelPercentage": 0,
+      "type": "PlugSocket",
+      "hardwareAddress": "00:11:22:33:44:03",
+      "firmwareVersion": "fixture-1"
+    },
+    {
+      "id": 104,
+      "displayName": "Fixture dimmer emitter",
+      "division": 10,
+      "switchedOn": false,
+      "capLevel": false,
+      "capOnOff": false,
+      "capMetering": false,
+      "capABCDButtons": true,
+      "capIRButtons": true,
+      "headerFilter": "Switches",
+      "endpoint": "NoValue",
+      "levelPercentage": 0,
+      "type": "LightingRegulator",
+      "hardwareAddress": "00:11:22:33:44:01",
+      "firmwareVersion": "fixture-1"
+    },
+    {
+      "id": 105,
+      "displayName": "Fixture four-key controller",
+      "division": 10,
+      "switchedOn": false,
+      "capLevel": false,
+      "capOnOff": false,
+      "capMetering": false,
+      "capABCDButtons": true,
+      "capIRButtons": true,
+      "headerFilter": "Switches",
+      "endpoint": "NoValue",
+      "levelPercentage": 0,
+      "type": "QuadPressureButton",
+      "hardwareAddress": "00:11:22:33:44:05",
+      "firmwareVersion": "fixture-1"
+    }
+  ]
+}

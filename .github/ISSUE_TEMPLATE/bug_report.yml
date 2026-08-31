@@ -1,0 +1,61 @@
+name: Bug report
+description: Report reproducible integration behavior without exposing installation data
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not include credentials, cookies, tokens, addresses, identifiers,
+        device names, captures, Home Assistant storage, app binaries, or
+        decompiler output.
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      placeholder: 0.6.5
+    validations:
+      required: true
+  - type: input
+    id: home_assistant_version
+    attributes:
+      label: Home Assistant version
+      placeholder: 2026.8.3
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Setup or authentication
+        - Inventory or device grouping
+        - Light or outlet control
+        - Blind control
+        - Wall or IR events
+        - Identification
+        - MQTT or protobuf updates
+        - Diagnostics
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Explain expected and observed behavior using synthetic names.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: checkboxes
+    id: sanitization
+    attributes:
+      label: Sanitization
+      options:
+        - label: I removed all installation-specific and secret information.
+          required: true

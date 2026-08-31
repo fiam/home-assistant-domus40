@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+// Private EFAPEL message header verified against the authenticated Home
+// Server schema on 2026-08-26. The integration skips this metadata on decode.
+message MessageInfo {
+  required int64 message_seq = 1;
+  required string originator = 2;
+  required int64 timestamp = 3;
+}

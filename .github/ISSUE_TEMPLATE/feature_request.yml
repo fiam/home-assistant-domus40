@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose a new device type or integration capability
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: Describe the desired Home Assistant behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized protocol or device evidence
+      description: >-
+        Describe available evidence without attaching captures, identifiers,
+        addresses, credentials, app binaries, or decompiler output.
+  - type: checkboxes
+    id: sanitization
+    attributes:
+      label: Sanitization
+      options:
+        - label: This request contains no installation-specific or secret information.
+          required: true
