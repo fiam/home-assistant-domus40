@@ -93,7 +93,7 @@ locations, IDs, and capabilities.
 
 Each logical actuator channel therefore remains a separate Home Assistant
 device. A named emitter is also separate and can be linked to a physical
-actuator sibling with Home Assistant's `via_device` relationship. Entity
+actuator sibling through Home Assistant's device registry. Entity
 identity is based on the logical row ID, never on a display name or network
 address.
 
@@ -121,8 +121,10 @@ Physical siblings are not implicitly broadened into an identification request.
 
 REST inventory is authoritative but can temporarily lag behind a successful
 write. The integration applies light, outlet, and blind commands optimistically
-and reconciles REST state for a bounded period. Push events can settle the state
-earlier.
+and reconciles REST state with bounded backoff. Compatible decoded push events
+update the in-memory state immediately and can settle a pending command without
+a REST request. Their values are protected briefly from a lagging REST readback.
+All full REST refreshes share a global limit of one every five seconds.
 
 For `LightingRegulator`, `levelPercentage` is the authoritative on/off and
 brightness value because `switchedOn` is not consistently authoritative for
@@ -171,11 +173,13 @@ the baked contract. State and metering compatibility are evaluated separately:
 
 - compatible state schemas enable decoded output and button updates;
 - incompatible state schemas use MQTT only as a change signal and trigger a
-  REST refresh;
+  coalesced, rate-limited REST refresh;
 - compatible instantaneous-reading schemas enable native power sensors;
 - incompatible metering schemas leave metering disabled rather than guessing.
 
-Diagnostics retain only schema hash prefixes and non-sensitive field contracts.
+Decode warnings retain only redacted topic shapes and value-free protobuf
+field/wire signatures. Schema warnings and diagnostics retain only schema hash
+prefixes, non-sensitive field contracts, and aggregate counters.
 
 ## Complete supported protobuf contract
 

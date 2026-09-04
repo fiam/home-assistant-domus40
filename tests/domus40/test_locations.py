@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 from custom_components.domus40.locations import (
-    assign_device_locations,
     ensure_location_hierarchy,
+    sync_device_registry,
 )
 from custom_components.domus40.models import Domus40State
 
@@ -55,7 +56,7 @@ class _FakeAreaRegistry:
 class _FakeDeviceRegistry:
     def __init__(self, devices: dict[tuple[str, str], Any]) -> None:
         self.devices = devices
-        self.updates: list[tuple[str, str]] = []
+        self.updates: list[tuple[str, dict[str, str | None]]] = []
 
     def async_get_device_by_identifier(
         self, identifier: tuple[str, str], config_entry_id: str
@@ -64,10 +65,13 @@ class _FakeDeviceRegistry:
             raise AssertionError(config_entry_id)
         return self.devices.get(identifier)
 
-    def async_update_device(self, device_id: str, *, area_id: str) -> None:
+    def async_update_device(
+        self, device_id: str, **changes: str | None
+    ) -> None:
         device = next(item for item in self.devices.values() if item.id == device_id)
-        device.area_id = area_id
-        self.updates.append((device_id, area_id))
+        for key, value in changes.items():
+            setattr(device, key, value)
+        self.updates.append((device_id, changes))
 
 
 class LocationRegistryTests(unittest.TestCase):
@@ -122,13 +126,13 @@ class LocationRegistryTests(unittest.TestCase):
         registry = _FakeDeviceRegistry(
             {
                 ("domus40", "fixture-server-201"): SimpleNamespace(
-                    id="device-201", area_id=old_hall.id
+                    id="device-201", area_id=old_hall.id, via_device_id=None
                 ),
                 ("domus40", "fixture-server-202"): SimpleNamespace(
-                    id="device-202", area_id=custom_area.id
+                    id="device-202", area_id=custom_area.id, via_device_id=None
                 ),
                 ("domus40", "fixture-server-203"): SimpleNamespace(
-                    id="device-203", area_id=None
+                    id="device-203", area_id=None, via_device_id=None
                 ),
             }
         )
@@ -142,7 +146,7 @@ class LocationRegistryTests(unittest.TestCase):
                 return_value=registry,
             ),
         ):
-            moved = assign_device_locations(
+            stats = sync_device_registry(
                 SimpleNamespace(),
                 config_entry_id="fixture-entry",
                 server_id="fixture-server",
@@ -150,7 +154,8 @@ class LocationRegistryTests(unittest.TestCase):
                 division_area_ids=division_area_ids,
             )
 
-        self.assertEqual(moved, 2)
+        self.assertEqual(stats.assigned_areas, 2)
+        self.assertEqual(stats.updated_links, 0)
         self.assertEqual(
             registry.devices[("domus40", "fixture-server-201")].area_id,
             division_area_ids["10"],
@@ -164,3 +169,65 @@ class LocationRegistryTests(unittest.TestCase):
             division_area_ids["12"],
         )
 
+    def test_sibling_links_use_registry_ids_and_clear_stale_links(self) -> None:
+        fixture = json.loads((FIXTURES / "inventory.json").read_text())
+        state = Domus40State.from_api(
+            fixture["devices"], fixture["divisions"], fixture["areas"]
+        )
+        secondary = replace(
+            state.devices["104"],
+            division_id="11",
+            division_name="Fixture secondary room",
+        )
+        state = Domus40State(
+            devices={**state.devices, secondary.device_id: secondary},
+            locations=state.locations,
+        )
+        registry = _FakeDeviceRegistry(
+            {
+                ("domus40", "fixture-server-101"): SimpleNamespace(
+                    id="device-101", area_id=None, via_device_id=None
+                ),
+                ("domus40", "fixture-server-104"): SimpleNamespace(
+                    id="device-104", area_id=None, via_device_id=None
+                ),
+                ("domus40", "fixture-server-105"): SimpleNamespace(
+                    id="device-105", area_id=None, via_device_id="stale-parent"
+                ),
+            }
+        )
+        with (
+            patch(
+                "custom_components.domus40.locations.ar.async_get",
+                return_value=_FakeAreaRegistry(),
+            ),
+            patch(
+                "custom_components.domus40.locations.dr.async_get",
+                return_value=registry,
+            ),
+        ):
+            stats = sync_device_registry(
+                SimpleNamespace(),
+                config_entry_id="fixture-entry",
+                server_id="fixture-server",
+                state=state,
+                division_area_ids={"10": "area-primary", "11": "area-secondary"},
+            )
+
+        self.assertEqual(stats.assigned_areas, 3)
+        self.assertEqual(stats.updated_links, 2)
+        self.assertEqual(
+            registry.devices[("domus40", "fixture-server-104")].via_device_id,
+            "device-101",
+        )
+        self.assertEqual(
+            registry.devices[("domus40", "fixture-server-101")].area_id,
+            "area-primary",
+        )
+        self.assertEqual(
+            registry.devices[("domus40", "fixture-server-104")].area_id,
+            "area-secondary",
+        )
+        self.assertIsNone(
+            registry.devices[("domus40", "fixture-server-105")].via_device_id
+        )

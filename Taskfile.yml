@@ -1,7 +1,9 @@
 version: '3'
 
 vars:
-  HOME_ASSISTANT_VERSION: '2026.8.3'
+  HOME_ASSISTANT_VERSIONS:
+    - '2026.8.0'
+    - '2026.9.0'
   RUFF_VERSION: '0.16.5'
   COMMITLINT_VERSION: '21.2.2'
   COMMITLINT_IMAGE: 'node@sha256:9f94d34c787165dca03b74e5bf9c3bf90e8de79b19aa3d87fe1fa1694bf75c89'
@@ -12,18 +14,20 @@ tasks:
       - task --list
 
   test:
-    desc: Run protocol and emulator contracts in the pinned Home Assistant image
+    desc: Run protocol and emulator contracts in the pinned Home Assistant images
     preconditions:
       - sh: command -v docker >/dev/null
         msg: Install Docker before running the contract tests.
     cmds:
-      - >-
-        docker run --rm
-        -v "{{.ROOT_DIR}}:/work:ro"
-        -w /work
-        -e PYTHONPATH=/work
-        "homeassistant/home-assistant:{{.HOME_ASSISTANT_VERSION}}"
-        python -m unittest discover -s tests/domus40 -v
+      - for:
+          var: HOME_ASSISTANT_VERSIONS
+        cmd: >-
+          docker run --rm
+          -v "{{.ROOT_DIR}}:/work:ro"
+          -w /work
+          -e PYTHONPATH=/work
+          "homeassistant/home-assistant:{{.ITEM}}"
+          python -m unittest discover -s tests/domus40 -v
 
   lint:
     desc: Lint the integration, tests, and emulator

@@ -55,8 +55,10 @@ from .proto import (
 _LOGGER = logging.getLogger(__name__)
 
 WRITE_CONFIRM_TIMEOUT = 15.0
-WRITE_REFRESH_DELAY = 0.5
-WRITE_REFRESH_INTERVAL = 1.0
+WRITE_REFRESH_DELAYS = (0.5, 1.5, 3.0, 5.0)
+FALLBACK_REFRESH_DELAY = 0.5
+REST_REFRESH_MIN_INTERVAL = 5.0
+DECODE_WARNING_INTERVAL = 100
 BUTTON_MAPPING_CONCURRENCY = 2
 REPORTING_CONCURRENCY = 2
 REPORTING_BATCH_SIZE = 8
@@ -195,11 +197,16 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self._session = session
         self._push_task: asyncio.Task[None] | None = None
         self._reporting_task: asyncio.Task[None] | None = None
-        self._refresh_task: asyncio.Task[None] | None = None
+        self._write_refresh_task: asyncio.Task[None] | None = None
+        self._fallback_refresh_task: asyncio.Task[None] | None = None
         self._binding_task: asyncio.Task[None] | None = None
         self._ir_binding_tasks: dict[str, asyncio.Task[None]] = {}
         self._pending_levels: dict[str, _PendingLevel] = {}
-        self._refresh_requested = False
+        self._recent_push_levels: dict[str, _PendingLevel] = {}
+        self._fallback_refresh_requested = False
+        self._last_fallback_refresh_at: float | None = None
+        self._last_rest_refresh_at: float | None = None
+        self._rest_refresh_lock = asyncio.Lock()
         self._shutting_down = False
         self.schema_compatible = False
         self.metering_schema_compatible = False
@@ -217,6 +224,10 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self.push_messages_received = 0
         self.push_messages_decoded = 0
         self.push_decode_failures = 0
+        self.push_state_decode_failures = 0
+        self.push_metering_decode_failures = 0
+        self.push_schema_mismatch_messages = 0
+        self.push_unhandled_state_messages = 0
         self.push_state_updates = 0
         self.push_button_events = 0
         self.push_metering_messages = 0
@@ -224,6 +235,9 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self.unknown_topic_shapes: Counter[str] = Counter()
         self.unknown_wire_signatures: Counter[str] = Counter()
         self.unknown_observations_dropped = 0
+        self.rest_refresh_attempts = 0
+        self.write_refresh_requests = 0
+        self.fallback_refresh_requests = 0
 
     @property
     def pending_write_count(self) -> int:
@@ -231,20 +245,46 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         return len(self._pending_levels)
 
     @property
+    def recent_push_guard_count(self) -> int:
+        """Return the number of push states protected from stale REST readback."""
+        return len(self._recent_push_levels)
+
+    @property
+    def rest_refresh_min_interval(self) -> float:
+        """Return the global minimum interval between full REST refreshes."""
+        return REST_REFRESH_MIN_INTERVAL
+
+    @property
     def unknown_monitoring_enabled(self) -> bool:
         """Return whether broad, redacted MQTT observation is enabled."""
         return monitor_unknown_messages(self._entry.options)
 
     async def _async_update_data(self) -> Domus40State:
-        try:
-            state = await self.client.async_get_state()
-        except Domus40AuthError as err:
-            raise ConfigEntryAuthFailed from err
-        except Domus40Error as err:
-            raise UpdateFailed("Unable to update from the Domus40 Home Server") from err
-        return _reconcile_pending_levels(
-            state, self._pending_levels, asyncio.get_running_loop().time()
-        )
+        async with self._rest_refresh_lock:
+            loop = asyncio.get_running_loop()
+            if self._last_rest_refresh_at is not None:
+                delay = max(
+                    0.0,
+                    self._last_rest_refresh_at
+                    + REST_REFRESH_MIN_INTERVAL
+                    - loop.time(),
+                )
+                if delay:
+                    await asyncio.sleep(delay)
+            self._last_rest_refresh_at = loop.time()
+            self.rest_refresh_attempts += 1
+            try:
+                state = await self.client.async_get_state()
+            except Domus40AuthError as err:
+                raise ConfigEntryAuthFailed from err
+            except Domus40Error as err:
+                raise UpdateFailed(
+                    "Unable to update from the Domus40 Home Server"
+                ) from err
+            state = _reconcile_pending_levels(state, self._pending_levels, loop.time())
+            return _reconcile_pending_levels(
+                state, self._recent_push_levels, loop.time()
+            )
 
     async def async_set_device_level(self, device_id: str, level: int) -> None:
         """Write a level without exposing the Home Server's stale readback."""
@@ -254,9 +294,10 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             bounded,
             asyncio.get_running_loop().time() + WRITE_CONFIRM_TIMEOUT,
         )
+        self._recent_push_levels.pop(device_id, None)
         if self.data is not None:
             self.async_set_updated_data(self.data.with_device_level(device_id, bounded))
-        self._schedule_refresh()
+        self._schedule_write_refresh()
 
     async def async_identify_device(self, device_id: str) -> None:
         """Ask the Home Server to blink exactly one logical device ID."""
@@ -310,10 +351,13 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self.metering_schema_compatible = bool(
             events_schema and instant_schema_is_compatible(events_schema)
         )
-        if (events_schema or constants_schema) and not self.schema_compatible:
+        if not self.schema_compatible:
             _LOGGER.warning(
                 "Domus40 state-event protobuf schema differs from the baked "
-                "revision; state pushes will trigger REST refreshes only"
+                "revision (events=%s, constants=%s); state pushes will use "
+                "rate-limited REST refreshes only",
+                self.schema_fingerprint or "unavailable",
+                self.constants_schema_fingerprint or "unavailable",
             )
         if events_schema and not self.metering_schema_compatible:
             _LOGGER.warning(
@@ -668,8 +712,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             try:
                 reading = decode_device_instant_reading_event(payload)
             except ProtobufDecodeError:
-                self.push_decode_failures += 1
-                _LOGGER.debug("Ignored an invalid Domus40 metering event")
+                self._record_decode_failure("metering", topic, payload)
             else:
                 self.push_messages_decoded += 1
                 device = self.data.devices.get(reading.device_id)
@@ -689,64 +732,152 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             return
 
         self._record_unexpected_fields("state", payload, STATE_EVENT_FIELD_NUMBERS)
-        if self.schema_compatible and self.data is not None:
-            try:
-                event = decode_device_state_event(payload)
-            except ProtobufDecodeError:
-                self.push_decode_failures += 1
-                _LOGGER.debug("Ignored an invalid Domus40 state event")
-            else:
-                self.push_messages_decoded += 1
-                if (
-                    event.endpoint in BUTTON_ENDPOINTS.values()
-                    and event.button_state in BUTTON_STATES
-                ):
-                    self.push_button_events += 1
-                    for listener in tuple(self._button_listeners):
-                        listener(event)
-                if (
-                    event.energy_level is not None
-                    and event.device_id in self.data.devices
-                    and (
-                        event.device_id not in self._pending_levels
-                        or self._pending_levels[event.device_id].level
-                        == event.energy_level
-                    )
-                ):
-                    self._pending_levels[event.device_id] = _PendingLevel(
-                        event.energy_level,
-                        asyncio.get_running_loop().time() + WRITE_CONFIRM_TIMEOUT,
-                    )
-                    self.async_set_updated_data(
-                        self.data.with_device_level(event.device_id, event.energy_level)
-                    )
-                    self.push_state_updates += 1
-        self._schedule_refresh()
-
-    def _schedule_refresh(self) -> None:
-        self._refresh_requested = True
-        if self._refresh_task and not self._refresh_task.done():
+        if not self.schema_compatible or self.data is None:
+            self.push_schema_mismatch_messages += 1
+            self._schedule_fallback_refresh()
             return
-        self._refresh_task = asyncio.create_task(
-            self._async_delayed_refresh(), name=f"{DOMAIN}-push-refresh"
+        try:
+            event = decode_device_state_event(payload)
+        except ProtobufDecodeError:
+            self._record_decode_failure("state", topic, payload)
+            self._schedule_fallback_refresh()
+            return
+
+        self.push_messages_decoded += 1
+        handled = False
+        if (
+            event.endpoint in BUTTON_ENDPOINTS.values()
+            and event.button_state in BUTTON_STATES
+        ):
+            handled = True
+            self.push_button_events += 1
+            for listener in tuple(self._button_listeners):
+                listener(event)
+
+        if event.energy_level is not None and event.device_id in self.data.devices:
+            handled = True
+            pending = self._pending_levels.get(event.device_id)
+            if pending is None or pending.level == event.energy_level:
+                self._pending_levels.pop(event.device_id, None)
+                self._recent_push_levels[event.device_id] = _PendingLevel(
+                    event.energy_level,
+                    asyncio.get_running_loop().time() + WRITE_CONFIRM_TIMEOUT,
+                )
+                self.async_set_updated_data(
+                    self.data.with_device_level(event.device_id, event.energy_level)
+                )
+                self.push_state_updates += 1
+            else:
+                self._schedule_write_refresh()
+
+        if not handled:
+            self.push_unhandled_state_messages += 1
+            self._schedule_fallback_refresh()
+
+    def _record_decode_failure(
+        self, message_type: str, topic: str, payload: bytes
+    ) -> None:
+        """Count and safely surface protobuf failures without retaining payloads."""
+        self.push_decode_failures += 1
+        if message_type == "state":
+            self.push_state_decode_failures += 1
+            failures = self.push_state_decode_failures
+        else:
+            self.push_metering_decode_failures += 1
+            failures = self.push_metering_decode_failures
+        mqtt_info = self.client.mqtt_info
+        prefix = mqtt_info.prefix if mqtt_info is not None else ""
+        topic_shape = _topic_shape(topic, prefix)
+        try:
+            fields = sorted(set(wire_field_signature(payload)))[:16]
+        except ProtobufDecodeError:
+            wire_signature = "invalid"
+        else:
+            wire_signature = ",".join(
+                f"{field}:{wire_type}" for field, wire_type in fields
+            )
+            if not wire_signature:
+                wire_signature = "empty"
+        if failures == 1 or failures % DECODE_WARNING_INTERVAL == 0:
+            _LOGGER.warning(
+                "Could not decode a Domus40 %s protobuf message (%s failures); "
+                "topic shape=%s, wire signature=%s; no values or device "
+                "information were retained",
+                message_type,
+                failures,
+                topic_shape,
+                wire_signature,
+            )
+        else:
+            _LOGGER.debug(
+                "Ignored an invalid Domus40 %s event; topic shape=%s, wire "
+                "signature=%s",
+                message_type,
+                topic_shape,
+                wire_signature,
+            )
+
+    async def _async_request_coordinated_refresh(self) -> None:
+        """Request a REST refresh through the coordinator's global rate limit."""
+        await self.async_request_refresh()
+
+    def _schedule_write_refresh(self) -> None:
+        """Reconcile optimistic commands with bounded-backoff REST reads."""
+        if self._write_refresh_task and not self._write_refresh_task.done():
+            return
+        self._write_refresh_task = asyncio.create_task(
+            self._async_write_refresh_loop(), name=f"{DOMAIN}-write-refresh"
         )
 
-    async def _async_delayed_refresh(self) -> None:
-        delay = WRITE_REFRESH_DELAY
+    async def _async_write_refresh_loop(self) -> None:
+        delay_index = 0
         try:
-            while True:
+            while self._pending_levels:
+                delay = WRITE_REFRESH_DELAYS[
+                    min(delay_index, len(WRITE_REFRESH_DELAYS) - 1)
+                ]
                 await asyncio.sleep(delay)
-                self._refresh_requested = False
-                await self.async_request_refresh()
-                if not self._pending_levels and not self._refresh_requested:
+                if not self._pending_levels:
                     return
-                delay = WRITE_REFRESH_INTERVAL
+                self.write_refresh_requests += 1
+                await self._async_request_coordinated_refresh()
+                delay_index += 1
         finally:
-            self._refresh_task = None
-            if not self._shutting_down and (
-                self._pending_levels or self._refresh_requested
-            ):
-                self._schedule_refresh()
+            self._write_refresh_task = None
+            if not self._shutting_down and self._pending_levels:
+                self._schedule_write_refresh()
+
+    def _schedule_fallback_refresh(self) -> None:
+        """Coalesce undecodable state pushes into rate-limited REST reads."""
+        self._fallback_refresh_requested = True
+        if self._fallback_refresh_task and not self._fallback_refresh_task.done():
+            return
+        self._fallback_refresh_task = asyncio.create_task(
+            self._async_fallback_refresh_loop(), name=f"{DOMAIN}-fallback-refresh"
+        )
+
+    async def _async_fallback_refresh_loop(self) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            while self._fallback_refresh_requested:
+                if self._last_fallback_refresh_at is None:
+                    delay = FALLBACK_REFRESH_DELAY
+                else:
+                    delay = max(
+                        0.0,
+                        self._last_fallback_refresh_at
+                        + REST_REFRESH_MIN_INTERVAL
+                        - loop.time(),
+                    )
+                await asyncio.sleep(delay)
+                self._fallback_refresh_requested = False
+                self.fallback_refresh_requests += 1
+                await self._async_request_coordinated_refresh()
+                self._last_fallback_refresh_at = loop.time()
+        finally:
+            self._fallback_refresh_task = None
+            if not self._shutting_down and self._fallback_refresh_requested:
+                self._schedule_fallback_refresh()
 
     async def async_shutdown(self) -> None:
         """Stop background work and revoke the Home Server session."""
@@ -756,7 +887,8 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             for task in (
                 self._push_task,
                 self._reporting_task,
-                self._refresh_task,
+                self._write_refresh_task,
+                self._fallback_refresh_task,
                 self._binding_task,
             )
             if task is not None

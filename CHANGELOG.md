@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Apply compatible decoded MQTT state events directly to Home Assistant instead
+  of performing a full REST refresh after every message.
+- Coalesce schema-mismatch and decode-failure fallbacks, cap all full REST
+  refreshes to one every five seconds, and use bounded backoff when reconciling
+  optimistic commands.
+- Surface schema fingerprints, redacted MQTT topic shapes, value-free protobuf
+  wire signatures, and refresh/decode counters for troubleshooting without
+  retaining private installation data.
+
+## [0.10.0] - 2026-09-03
+
 ### Added
 
 - Add an integration-level **Refresh inventory and mappings** action that
@@ -13,12 +26,17 @@ All notable changes to this project are documented here. The format follows
   emitter-assignment changes.
 - Add complete Spanish translations for setup, reauthentication, options,
   errors, and the inventory refresh action.
+- Test the sanitized integration contracts against both the supported Home
+  Assistant 2026.8.0 minimum and Home Assistant 2026.9.0.
 
 ### Changed
 
 - Stop passing Home Assistant's deprecated `suggested_area` device field;
   explicit floor, area, and device registry assignment now owns all Domus40
   placement.
+- Replace deprecated identifier-based `via_device` metadata with
+  registry-ID-based `via_device_id` reconciliation while preserving separate
+  logical-device names and areas on Home Assistant 2026.8 and 2026.9.
 - Restructure the documentation around installation and daily use, add a
   complete supported LAN protocol and protobuf reference, and remove
   installation-specific acceptance details.
@@ -90,7 +108,8 @@ All notable changes to this project are documented here. The format follows
   mapping discovery, identification, MQTT push updates, baked protobuf schemas,
   diagnostics, sanitized emulator contracts, and HACS metadata.
 
-[Unreleased]: https://github.com/fiam/home-assistant-domus40/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/fiam/home-assistant-domus40/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/fiam/home-assistant-domus40/compare/v0.8.0...v0.10.0
 [0.8.0]: https://github.com/fiam/home-assistant-domus40/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/fiam/home-assistant-domus40/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/fiam/home-assistant-domus40/compare/v0.6.5...v0.7.0

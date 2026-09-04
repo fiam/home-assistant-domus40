@@ -22,6 +22,14 @@ class LocationSyncStats:
     assigned_area_floors: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class DeviceRegistrySyncStats:
+    """Aggregate device registry changes safe to include in logs."""
+
+    assigned_areas: int = 0
+    updated_links: int = 0
+
+
 def ensure_location_hierarchy(
     hass: HomeAssistant, state: Domus40State
 ) -> tuple[dict[str, str], LocationSyncStats]:
@@ -61,39 +69,68 @@ def ensure_location_hierarchy(
     )
 
 
-def assign_device_locations(
+def sync_device_registry(
     hass: HomeAssistant,
     *,
     config_entry_id: str,
     server_id: str,
     state: Domus40State,
     division_area_ids: dict[str, str],
-) -> int:
-    """Assign new/default Domus40 devices while preserving custom HA areas."""
+) -> DeviceRegistrySyncStats:
+    """Reconcile sibling links and conservative Home Assistant area placement."""
     area_registry = ar.async_get(hass)
     device_registry = dr.async_get(hass)
-    moved = 0
+    registry_devices = {
+        device.device_id: registry_device
+        for device in state.devices.values()
+        if (
+            registry_device := device_registry.async_get_device_by_identifier(
+                (DOMAIN, f"{server_id}-{device.device_id}"), config_entry_id
+            )
+        )
+        is not None
+    }
+    assigned_areas = 0
+    updated_links = 0
     for device in state.devices.values():
-        if device.division_id is None or (
+        if (registry_device := registry_devices.get(device.device_id)) is None:
+            continue
+        updates: dict[str, str | None] = {}
+
+        primary = state.primary_device(device.device_id)
+        desired_via_device_id: str | None = None
+        if primary.device_id != device.device_id and primary.supports_entity:
+            if (primary_entry := registry_devices.get(primary.device_id)) is None:
+                # Entity setup should have registered the primary first. If it
+                # did not, preserve the current relationship for this refresh.
+                desired_via_device_id = getattr(
+                    registry_device, "via_device_id", None
+                )
+            else:
+                desired_via_device_id = primary_entry.id
+        if (
+            getattr(registry_device, "via_device_id", None)
+            != desired_via_device_id
+        ):
+            updates["via_device_id"] = desired_via_device_id
+            updated_links += 1
+
+        if device.division_id is not None and (
             target_area_id := division_area_ids.get(device.division_id)
-        ) is None:
-            continue
-        registry_device = device_registry.async_get_device_by_identifier(
-            (DOMAIN, f"{server_id}-{device.device_id}"), config_entry_id
-        )
-        if registry_device is None or registry_device.area_id == target_area_id:
-            continue
+        ) is not None and registry_device.area_id != target_area_id:
+            default_area_ids: set[str | None] = {None}
+            if device.division_name is not None and (
+                old_area := area_registry.async_get_area_by_name(device.division_name)
+            ) is not None:
+                default_area_ids.add(old_area.id)
+            if registry_device.area_id in default_area_ids:
+                updates["area_id"] = target_area_id
+                assigned_areas += 1
 
-        default_area_ids: set[str | None] = {None}
-        if device.division_name is not None and (
-            old_area := area_registry.async_get_area_by_name(device.division_name)
-        ) is not None:
-            default_area_ids.add(old_area.id)
-        if registry_device.area_id not in default_area_ids:
-            continue
+        if updates:
+            device_registry.async_update_device(registry_device.id, **updates)
 
-        device_registry.async_update_device(
-            registry_device.id, area_id=target_area_id
-        )
-        moved += 1
-    return moved
+    return DeviceRegistrySyncStats(
+        assigned_areas=assigned_areas,
+        updated_links=updated_links,
+    )

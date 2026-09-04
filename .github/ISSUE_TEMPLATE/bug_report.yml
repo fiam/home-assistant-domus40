@@ -13,14 +13,14 @@ body:
     id: integration_version
     attributes:
       label: Integration version
-      placeholder: 0.6.5
+      placeholder: 0.10.0
     validations:
       required: true
   - type: input
     id: home_assistant_version
     attributes:
       label: Home Assistant version
-      placeholder: 2026.8.3
+      placeholder: 2026.9.0
     validations:
       required: true
   - type: dropdown

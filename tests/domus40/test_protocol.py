@@ -28,7 +28,6 @@ from custom_components.domus40.coordinator import (
     _reporting_batches,
     _topic_shape,
 )
-from custom_components.domus40.entity import _parent_device
 from custom_components.domus40.models import Domus40State, MqttInfo
 from custom_components.domus40.mqtt import (
     _connect_packet,
@@ -158,12 +157,15 @@ class InventoryTests(unittest.TestCase):
                 independent_channel.device_id: independent_channel,
             }
         )
-        self.assertIsNone(_parent_device(dual_channel_state, first_channel))
         self.assertEqual(
-            _parent_device(dual_channel_state, second_channel), first_channel
+            dual_channel_state.primary_device(first_channel.device_id), first_channel
         )
         self.assertEqual(
-            _parent_device(dual_channel_state, state.devices["104"]), first_channel
+            dual_channel_state.primary_device(second_channel.device_id), first_channel
+        )
+        self.assertEqual(
+            dual_channel_state.primary_device(state.devices["104"].device_id),
+            first_channel,
         )
         self.assertEqual(second_channel.division_name, "Fixture second room")
         self.assertEqual(

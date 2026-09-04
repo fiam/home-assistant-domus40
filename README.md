@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/fiam/home-assistant-domus40/actions/workflows/check.yml"><img src="https://github.com/fiam/home-assistant-domus40/actions/workflows/check.yml/badge.svg" alt="Check"></a>
-  <img src="https://img.shields.io/badge/Home%20Assistant-2026.8.3-41BDF5" alt="Home Assistant 2026.8.3">
+  <img src="https://img.shields.io/badge/Home%20Assistant-2026.8%20%7C%202026.9-41BDF5" alt="Home Assistant 2026.8 and 2026.9">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c1d95" alt="MIT license"></a>
 </p>
 
@@ -32,7 +32,8 @@ hardware and its installation:
 
 ## Requirements
 
-- Home Assistant `2026.8.3` or the version listed in
+- Home Assistant `2026.8.0` is the minimum supported release; exact
+  forward-tested versions are listed in
   [the compatibility contract](COMPATIBILITY.md)
 - An EFAPEL Domus40 Home Server reachable from the Home Assistant host
 - An existing administrator account accepted by that Home Server
@@ -86,8 +87,8 @@ Portuguese, and Spanish.
 The Home Server lists controllable outputs as **Actuators** and input devices
 as **Switches**; the Portuguese interface calls inputs **Emissores**. The
 integration keeps separately named logical channels and emitters as separate
-Home Assistant devices, linking physical siblings with `via_device` where
-applicable.
+Home Assistant devices, linking physical siblings through Home Assistant's
+device registry where applicable.
 
 ### Floors and areas
 
@@ -141,13 +142,16 @@ power sensor when needed.
   mappings**.
 - If push updates stop after a Home Server update, download diagnostics and
   inspect `schema_compatible`. A schema mismatch safely falls back to periodic
-  REST refreshes instead of guessing at protobuf values.
+  REST refreshes instead of guessing at protobuf values. Decode warnings include
+  a redacted topic shape and value-free wire signature, while schema warnings
+  include non-secret fingerprints; neither retains device information.
 - **Monitor unknown MQTT messages** can be enabled temporarily in the Configure
   dialog. It records only bounded, redacted topic shapes and protobuf field/wire
   signatures. Disable it after collecting diagnostics.
 
-The integration polls authoritative state every 30 seconds and supplements it
-with local MQTT-over-WebSocket events. Commands update Home Assistant
+The integration polls authoritative state every 30 seconds and applies valid
+local MQTT-over-WebSocket state events directly in memory. Full REST refreshes
+are globally capped at one every five seconds. Commands update Home Assistant
 optimistically while the integration reconciles a temporarily stale REST view.
 No distinct blind stop command has been verified, so one is not advertised.
 

@@ -74,9 +74,19 @@ async def async_get_config_entry_diagnostics(
             "messages_received": coordinator.push_messages_received,
             "messages_decoded": coordinator.push_messages_decoded,
             "decode_failures": coordinator.push_decode_failures,
+            "state_decode_failures": coordinator.push_state_decode_failures,
+            "schema_mismatch_messages": (coordinator.push_schema_mismatch_messages),
+            "unhandled_state_messages": (coordinator.push_unhandled_state_messages),
             "state_updates": coordinator.push_state_updates,
             "button_events": coordinator.push_button_events,
             "pending_write_count": coordinator.pending_write_count,
+            "recent_push_guard_count": coordinator.recent_push_guard_count,
+            "rest_refresh_attempts": coordinator.rest_refresh_attempts,
+            "write_refresh_requests": coordinator.write_refresh_requests,
+            "fallback_refresh_requests": coordinator.fallback_refresh_requests,
+            "rest_refresh_min_interval_seconds": (
+                coordinator.rest_refresh_min_interval
+            ),
         },
         "metering": {
             "schema_compatible": coordinator.metering_schema_compatible,
@@ -87,6 +97,7 @@ async def async_get_config_entry_diagnostics(
                 coordinator.reporting_activation_failures
             ),
             "messages_received": coordinator.push_metering_messages,
+            "decode_failures": coordinator.push_metering_decode_failures,
             "power_updates": coordinator.push_power_updates,
             "devices_with_readings": len(coordinator.power_readings),
         },

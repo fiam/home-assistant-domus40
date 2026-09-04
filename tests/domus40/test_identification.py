@@ -173,10 +173,8 @@ class IdentificationEntityTests(unittest.IsolatedAsyncioTestCase):
             entity.device_info["identifiers"],
             {("domus40", "fixture-server-106")},
         )
-        self.assertEqual(
-            entity.device_info["via_device"],
-            ("domus40", "fixture-server-101"),
-        )
+        self.assertNotIn("via_device", entity.device_info)
+        self.assertNotIn("via_device_id", entity.device_info)
         self.assertEqual(entity.device_info["name"], "Fixture second channel")
         self.assertNotIn("suggested_area", entity.device_info)
 

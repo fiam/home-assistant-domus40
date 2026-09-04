@@ -8,17 +8,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import Domus40ConfigEntry
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import Domus40Coordinator
-from .models import Domus40Device, Domus40State
-
-
-def _parent_device(
-    state: Domus40State, device: Domus40Device
-) -> Domus40Device | None:
-    """Return the primary physical sibling for one secondary logical row."""
-    primary = state.primary_device(device.device_id)
-    if primary.device_id == device.device_id or not primary.supports_entity:
-        return None
-    return primary
+from .models import Domus40Device
 
 
 class Domus40Entity(CoordinatorEntity[Domus40Coordinator]):
@@ -34,18 +24,12 @@ class Domus40Entity(CoordinatorEntity[Domus40Coordinator]):
         server_id = entry.unique_id or entry.entry_id
         self._attr_unique_id = f"{server_id}-{device.device_id}"
         self._attr_name = device.name
-        parent = _parent_device(entry.runtime_data.coordinator.data, device)
         # Domus40 assigns names and divisions to logical rows, including
         # separate output channels on one physical module. Give every row its
         # own HA device so a sibling cannot inherit the primary row's area or
-        # produce a misleading combined name. Keep the physical relationship
-        # visible through ``via_device``.
+        # produce a misleading combined name. Physical relationships are
+        # reconciled by registry id after every entity platform is set up.
         registry_device = device
-        via_device = (
-            (DOMAIN, f"{server_id}-{parent.device_id}")
-            if parent is not None
-            else None
-        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{server_id}-{registry_device.device_id}")},
             manufacturer=MANUFACTURER,
@@ -56,7 +40,6 @@ class Domus40Entity(CoordinatorEntity[Domus40Coordinator]):
             ),
             name=registry_device.name,
             sw_version=registry_device.firmware_version,
-            via_device=via_device,
         )
 
     @property

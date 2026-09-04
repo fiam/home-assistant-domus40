@@ -23,7 +23,7 @@ from .const import (
     WALL_BUTTON_ENDPOINTS,
 )
 from .coordinator import Domus40Coordinator
-from .locations import assign_device_locations, ensure_location_hierarchy
+from .locations import ensure_location_hierarchy, sync_device_registry
 from .models import Domus40Device
 
 _LOGGER = logging.getLogger(__name__)
@@ -208,7 +208,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: Domus40ConfigEntry) -> b
     )
     moved_entities = _split_grouped_logical_devices(hass, entry, coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    assigned_devices = assign_device_locations(
+    device_registry_stats = sync_device_registry(
         hass,
         config_entry_id=entry.entry_id,
         server_id=entry.unique_id or entry.entry_id,
@@ -220,7 +220,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: Domus40ConfigEntry) -> b
     )
     if (
         moved_entities
-        or assigned_devices
+        or device_registry_stats.assigned_areas
+        or device_registry_stats.updated_links
         or removed_entities
         or removed_devices
         or location_stats.created_floors
@@ -229,12 +230,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: Domus40ConfigEntry) -> b
     ):
         _LOGGER.info(
             "Created %s floors and %s areas, assigned %s areas to floors and "
-            "%s devices to areas, moved %s Domus40 entities, removed %s stale "
-            "entities and %s orphaned devices",
+            "%s devices to areas, updated %s physical sibling links, moved %s "
+            "Domus40 entities, removed %s stale entities and %s orphaned devices",
             location_stats.created_floors,
             location_stats.created_areas,
             location_stats.assigned_area_floors,
-            assigned_devices,
+            device_registry_stats.assigned_areas,
+            device_registry_stats.updated_links,
             moved_entities,
             removed_entities,
             removed_devices,
