@@ -223,6 +223,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self.metering_schema_fields: dict[str, dict[str, str | int]] = {}
         self.power_readings: dict[str, DeviceInstantReadingEvent] = {}
         self.power_reading_recorded_at: dict[str, float] = {}
+        self._power_expiry_handle: asyncio.TimerHandle | None = None
         self.reporting_active_ids: set[str] = set()
         self.reporting_activation_failures = 0
         self.button_bindings: dict[tuple[str, str], Domus40ButtonBinding] = {}
@@ -564,9 +565,6 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             return
         batches = _reporting_batches(state.metering_devices)
         semaphore = asyncio.Semaphore(REPORTING_CONCURRENCY)
-        mqtt_info = self.client.mqtt_info
-        prefix = mqtt_info.prefix if mqtt_info is not None else ""
-        reporting_filter = f"{prefix}{MQTT_METERING_TOPIC}"
 
         async def activate(device_id: str) -> tuple[str, bool]:
             async with semaphore:
@@ -576,6 +574,11 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                     raise
                 except Domus40Error:
                     return device_id, False
+                # Activating a lease may re-authenticate after a Home Server
+                # restart and replace the broker's credentials and prefix.
+                mqtt_info = self.client.mqtt_info
+                prefix = mqtt_info.prefix if mqtt_info is not None else ""
+                reporting_filter = f"{prefix}{MQTT_METERING_TOPIC}"
                 if not topic_matches_subscription(reporting_filter, topic):
                     try:
                         await self.client.async_deactivate_reporting(device_id)
@@ -630,7 +633,40 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         if recorded_at is None:
             return False
         age = asyncio.get_running_loop().time() - recorded_at
-        return age <= self.power_reading_max_age_seconds()
+        return age < self.power_reading_max_age_seconds()
+
+    @callback
+    def _schedule_power_expiry(self) -> None:
+        """Notify entities at the next expiry without requesting REST state."""
+        if self._shutting_down or not self.power_reading_recorded_at:
+            return
+        expires_at = min(self.power_reading_recorded_at.values()) + (
+            self.power_reading_max_age_seconds()
+        )
+        if self._power_expiry_handle is not None:
+            if self._power_expiry_handle.when() <= expires_at:
+                return
+            self._power_expiry_handle.cancel()
+        self._power_expiry_handle = asyncio.get_running_loop().call_at(
+            expires_at, self._expire_power_readings
+        )
+
+    @callback
+    def _expire_power_readings(self) -> None:
+        """Publish unknown values even if unchanged polling suppresses updates."""
+        self._power_expiry_handle = None
+        now = asyncio.get_running_loop().time()
+        max_age = self.power_reading_max_age_seconds()
+        expired = [
+            device_id
+            for device_id, recorded_at in self.power_reading_recorded_at.items()
+            if now - recorded_at >= max_age
+        ]
+        for device_id in expired:
+            self.power_reading_recorded_at.pop(device_id)
+        if expired:
+            self.async_update_listeners()
+        self._schedule_power_expiry()
 
     def _record_unknown_message(self, topic: str, payload: bytes) -> None:
         """Record only a redacted topic shape and field/wire signature."""
@@ -788,6 +824,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                     self.power_reading_recorded_at[reading.device_id] = (
                         asyncio.get_running_loop().time()
                     )
+                    self._schedule_power_expiry()
                     self.push_power_updates += 1
                     self.async_update_listeners()
             return
@@ -948,6 +985,10 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
     async def async_shutdown(self) -> None:
         """Stop background work and revoke the Home Server session."""
         self._shutting_down = True
+        await super().async_shutdown()
+        if self._power_expiry_handle is not None:
+            self._power_expiry_handle.cancel()
+            self._power_expiry_handle = None
         tasks = [
             task
             for task in (

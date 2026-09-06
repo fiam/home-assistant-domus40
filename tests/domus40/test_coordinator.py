@@ -8,7 +8,9 @@ import unittest
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
+from homeassistant.core import HomeAssistant
 
 from custom_components.domus40.coordinator import (
     METERING_STALE_MIN_SECONDS,
@@ -63,6 +65,8 @@ def _push_coordinator(state: Domus40State) -> Domus40Coordinator:
     coordinator.push_power_updates = 0
     coordinator.power_readings = {}
     coordinator.power_reading_recorded_at = {}
+    coordinator._power_expiry_handle = None
+    coordinator._shutting_down = False
     coordinator.unknown_topic_shapes = Counter()
     coordinator.unknown_wire_signatures = Counter()
     coordinator.unknown_observations_dropped = 0
@@ -212,6 +216,64 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.write_refresh_requests, 2)
         self.assertEqual(delays, list(WRITE_REFRESH_DELAYS[:2]))
         self.assertIsNone(coordinator._write_refresh_task)
+
+
+class CoordinatorRefreshIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    """Exercise burst handling through the real Home Assistant coordinator."""
+
+    async def asyncSetUp(self) -> None:
+        self.refresh_times: list[float] = []
+        self.refreshed = asyncio.Event()
+
+        async def get_state() -> Domus40State:
+            self.refresh_times.append(asyncio.get_running_loop().time())
+            self.refreshed.set()
+            return _fixture_state()
+
+        client = SimpleNamespace(
+            mqtt_info=MqttInfo("fixture-user", "fixture-password", "fixture/"),
+            async_get_state=get_state,
+            async_logout=AsyncMock(),
+        )
+        self.coordinator = Domus40Coordinator(
+            HomeAssistant("/tmp/domus40-fixture"), None, client, None
+        )
+        self.coordinator._entry = SimpleNamespace(options={})
+        self.coordinator.update_interval = None
+        self.coordinator.data = _fixture_state()
+        self.coordinator.schema_compatible = True
+
+    async def asyncTearDown(self) -> None:
+        await self.coordinator.async_shutdown()
+
+    async def test_decoded_push_burst_does_not_poll(self) -> None:
+        for _ in range(200):
+            await self.coordinator._async_handle_push(STATE_TOPIC, STATE_PAYLOAD)
+        await asyncio.sleep(0)
+
+        self.assertEqual(self.coordinator.push_state_updates, 200)
+        self.assertEqual(self.refresh_times, [])
+        self.assertEqual(self.coordinator.data.devices["101"].level, 20)
+
+    async def test_fallback_burst_coalesces_behind_global_rest_limit(self) -> None:
+        await self.coordinator.async_refresh()
+        self.refreshed.clear()
+        self.coordinator.schema_compatible = False
+
+        for _ in range(200):
+            await self.coordinator._async_handle_push(STATE_TOPIC, STATE_PAYLOAD)
+        await asyncio.wait_for(
+            self.refreshed.wait(), REST_REFRESH_MIN_INTERVAL + 2
+        )
+        await asyncio.sleep(0.1)
+
+        self.assertEqual(len(self.refresh_times), 2)
+        self.assertGreaterEqual(
+            self.refresh_times[1] - self.refresh_times[0],
+            REST_REFRESH_MIN_INTERVAL,
+        )
+        self.assertEqual(self.coordinator.fallback_refresh_requests, 1)
+        self.assertIsNone(self.coordinator._fallback_refresh_task)
 
 
 class MeteringFreshnessTests(unittest.IsolatedAsyncioTestCase):
@@ -366,6 +428,49 @@ class PushReconnectTests(unittest.IsolatedAsyncioTestCase):
         )
         warnings = sum("consecutive" in line for line in captured.output)
         self.assertEqual(warnings, 1)
+
+
+class ReportingReconnectTests(unittest.IsolatedAsyncioTestCase):
+    """Keep metering leases working after a broker topic-prefix rotation."""
+
+    async def test_reporting_uses_prefix_refreshed_during_activation(self) -> None:
+        coordinator = _push_coordinator(_fixture_state())
+        coordinator.reporting_active_ids = set()
+        coordinator.reporting_activation_failures = 0
+        coordinator.client.async_deactivate_reporting = AsyncMock()
+        coordinator._async_deactivate_reporting = AsyncMock()
+        activations = 0
+        active_samples: list[set[str]] = []
+
+        async def activate(device_id: str) -> str:
+            nonlocal activations
+            activations += 1
+            if activations == 2:
+                coordinator.client.mqtt_info = MqttInfo(
+                    "fixture-user", "rotated-password", "rotated/"
+                )
+            prefix = coordinator.client.mqtt_info.prefix
+            return f"{prefix}events/device/{device_id}/reading/instant"
+
+        async def sample(_delay: float) -> None:
+            active_samples.append(set(coordinator.reporting_active_ids))
+            if len(active_samples) == 2:
+                raise asyncio.CancelledError
+
+        coordinator.client.async_activate_reporting = activate
+        with (
+            patch(
+                "custom_components.domus40.coordinator._reporting_batches",
+                return_value=[["101"]],
+            ),
+            patch("custom_components.domus40.coordinator.asyncio.sleep", sample),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await coordinator._async_reporting_loop()
+
+        self.assertEqual(active_samples, [{"101"}, {"101"}])
+        self.assertEqual(coordinator.reporting_activation_failures, 0)
+        coordinator.client.async_deactivate_reporting.assert_not_awaited()
 
 
 class SchemaWarningTests(unittest.IsolatedAsyncioTestCase):

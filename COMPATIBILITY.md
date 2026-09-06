@@ -7,7 +7,7 @@ interfaces. A successful import is not sufficient proof of compatibility.
 
 | Contract | Verified value |
 | --- | --- |
-| Integration release | `0.10.0` |
+| Integration release | `0.10.1` |
 | Minimum supported Home Assistant Core | `2026.8.0` |
 | Latest verified Home Assistant Core | `2026.9.0` |
 | Home Assistant container Python | `3.14` |
@@ -91,6 +91,22 @@ reconciliation, periodic polling, and explicit refresh requests all share a
 global limit of one full REST refresh every five seconds. Troubleshooting logs
 and diagnostics expose only schema fingerprints, redacted topic shapes,
 value-free protobuf wire signatures, and aggregate counters.
+
+Version 0.10.1 was validated with 63 sanitized tests in each exact Home
+Assistant image above. Tests through Home Assistant's real coordinator confirm
+that a burst of 200 decoded state events issues no REST requests, while 200
+schema-mismatch events coalesce into one fallback refresh and respect the
+five-second minimum after the previous poll. Emulator contracts cover rejected
+MQTT credentials followed by authenticated reconnection; coordinator contracts
+also cover a topic-prefix change during metering lease activation.
+
+Instantaneous readings expire through a shared event-loop timer that notifies
+entities without requesting REST state. Listener-level tests verify that a
+silent push pipeline becomes unknown, a new reading postpones expiry, and
+unloading cancels expiry notifications. Shutdown also delegates to Home
+Assistant's coordinator cleanup to cancel scheduled refreshes. The existing
+English, Portuguese, and Spanish catalogs still pass the structural contract;
+this patch introduces no new user-interface translation keys.
 
 ## Migration procedure
 

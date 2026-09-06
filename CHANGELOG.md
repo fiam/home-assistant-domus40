@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-06
+
 ### Fixed
 
 - Reconnect MQTT push updates after a Home Server restart. The push listener
@@ -15,8 +17,13 @@ All notable changes to this project are documented here. The format follows
   failing silently at debug level.
 - Power sensors now report an unknown value when instantaneous readings stop
   arriving instead of presenting the last reading as current indefinitely. A
-  reading expires after a bounded multiple of the metering round-robin cycle.
-
+  reading expires after a bounded multiple of the metering round-robin cycle;
+  a local timer updates Home Assistant even when no further state changes
+  arrive, without polling the Home Server.
+- Validate metering lease topics against the current MQTT prefix after
+  authentication, so reporting recovers when a Home Server restart rotates it.
+- Cancel the Home Assistant coordinator's refresh scheduler and pending power
+  expiry notification when the integration unloads.
 - Apply compatible decoded MQTT state events directly to Home Assistant instead
   of performing a full REST refresh after every message.
 - Coalesce schema-mismatch and decode-failure fallbacks, cap all full REST
