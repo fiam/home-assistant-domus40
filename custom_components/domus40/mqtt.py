@@ -21,6 +21,15 @@ class Domus40MqttError(Exception):
     """The private MQTT endpoint rejected or closed the connection."""
 
 
+class Domus40MqttRejectedError(Domus40MqttError):
+    """The broker refused the credentials, session, or subscription.
+
+    The Home Server rotates the MQTT credentials and topic prefix when it
+    restarts, so a rejection usually means the retained connection fields are
+    stale rather than permanently invalid.
+    """
+
+
 def _mqtt_string(value: str | bytes) -> bytes:
     encoded = value.encode() if isinstance(value, str) else value
     if len(encoded) > 65535:
@@ -130,6 +139,8 @@ class Domus40MqttClient:
         session: aiohttp.ClientSession,
         callback: MessageCallback,
         topics: tuple[str, ...] | None = None,
+        *,
+        on_connected: Callable[[], None] | None = None,
     ) -> None:
         """Initialize a push client."""
         host = urlsplit(base_url).hostname
@@ -139,6 +150,7 @@ class Domus40MqttClient:
         self._info = info
         self._session = session
         self._callback = callback
+        self._on_connected = on_connected
         self._topics = topics or (f"{info.prefix}{MQTT_STATE_TOPIC}",)
         if not self._topics:
             raise Domus40MqttError("at least one MQTT topic is required")
@@ -166,8 +178,10 @@ class Domus40MqttClient:
         ) as websocket:
             await websocket.send_bytes(_connect_packet(self._info))
             packet_type, _, body, buffer = await self._receive(websocket, b"")
-            if packet_type != 2 or len(body) < 2 or body[1] != 0:
-                raise Domus40MqttError("MQTT broker rejected the connection")
+            if packet_type != 2 or len(body) < 2:
+                raise Domus40MqttError("MQTT broker sent an invalid CONNACK")
+            if body[1] != 0:
+                raise Domus40MqttRejectedError("MQTT broker rejected the connection")
 
             for packet_id, topic in enumerate(self._topics, start=1):
                 await websocket.send_bytes(_subscribe_packet(topic, packet_id))
@@ -179,7 +193,9 @@ class Domus40MqttClient:
                 if packet_type == 9 and len(body) >= 3:
                     packet_id = int.from_bytes(body[:2], "big")
                     if body[2] == 0x80:
-                        raise Domus40MqttError("MQTT broker rejected a subscription")
+                        raise Domus40MqttRejectedError(
+                            "MQTT broker rejected a subscription"
+                        )
                     pending_subacks.discard(packet_id)
                 elif packet_type == 3:
                     await self._async_handle_publish(websocket, flags, body)
@@ -187,6 +203,9 @@ class Domus40MqttClient:
                     await websocket.send_bytes(_packet(0xD0))
                 elif packet_type == 13:
                     continue
+
+            if self._on_connected is not None:
+                self._on_connected()
 
             while True:
                 try:

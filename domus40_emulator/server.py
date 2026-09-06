@@ -79,6 +79,31 @@ def _mqtt_packet(header: int, body: bytes = b"") -> bytes:
     return bytes([header]) + _varint(len(body)) + body
 
 
+def _mqtt_connect_credentials(body: bytes) -> tuple[str | None, str | None]:
+    """Extract the username and password from one MQTT CONNECT body."""
+
+    def read_string(offset: int) -> tuple[bytes, int]:
+        length = int.from_bytes(body[offset : offset + 2], "big")
+        end = offset + 2 + length
+        return body[offset + 2 : end], end
+
+    _protocol_name, offset = read_string(0)
+    flags = body[offset + 1]
+    offset += 4  # protocol level, connect flags, and keep-alive
+    _client_id, offset = read_string(offset)
+    if flags & 0x04:
+        _will_topic, offset = read_string(offset)
+        _will_message, offset = read_string(offset)
+    username = password = None
+    if flags & 0x80:
+        raw_username, offset = read_string(offset)
+        username = raw_username.decode()
+    if flags & 0x40:
+        raw_password, offset = read_string(offset)
+        password = raw_password.decode()
+    return username, password
+
+
 def _pop_mqtt(buffer: bytes) -> tuple[int, int, bytes, bytes] | None:
     if len(buffer) < 2:
         return None
@@ -109,6 +134,8 @@ class Emulator:
         self.divisions: list[dict[str, Any]] = data["divisions"]
         self.areas: list[dict[str, Any]] = data["areas"]
         self.base64_events = base64_events
+        self.mqtt_username = MQTT_USERNAME
+        self.mqtt_password = MQTT_PASSWORD
         self.websockets: set[web.WebSocketResponse] = set()
         self.reporting_ids: set[int] = set()
         self.last_identification: tuple[int, int] | None = None
@@ -166,8 +193,8 @@ class Emulator:
         result = web.json_response(
             {
                 "mqttInfo": {
-                    "username": MQTT_USERNAME,
-                    "password": MQTT_PASSWORD,
+                    "username": self.mqtt_username,
+                    "password": self.mqtt_password,
                     "prefix": "fixture/",
                 }
             },
@@ -347,6 +374,11 @@ class Emulator:
             else:
                 await websocket.send_bytes(packet)
 
+    def rotate_mqtt_credentials(self) -> None:
+        """Rotate the broker credentials as a Home Server restart would."""
+        self.mqtt_username = f"{MQTT_USERNAME}-rotated"
+        self.mqtt_password = f"{MQTT_PASSWORD}-rotated"
+
     async def mqtt(self, request: web.Request) -> web.WebSocketResponse:
         websocket = web.WebSocketResponse(protocols=("mqttv3.1",))
         await websocket.prepare(request)
@@ -360,6 +392,17 @@ class Emulator:
                 while (packet := _pop_mqtt(buffer)) is not None:
                     packet_type, _, body, buffer = packet
                     if packet_type == 1:
+                        username, password = _mqtt_connect_credentials(body)
+                        if (username, password) != (
+                            self.mqtt_username,
+                            self.mqtt_password,
+                        ):
+                            # CONNACK return code 5: not authorized.
+                            await websocket.send_bytes(
+                                _mqtt_packet(0x20, b"\x00\x05")
+                            )
+                            await websocket.close()
+                            break
                         await websocket.send_bytes(_mqtt_packet(0x20, b"\x00\x00"))
                     elif packet_type == 8:
                         packet_id = body[:2]

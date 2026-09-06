@@ -72,6 +72,7 @@ async def async_get_config_entry_diagnostics(
             "constants_schema_fingerprint": (coordinator.constants_schema_fingerprint),
             "device_state_fields": coordinator.schema_fields,
             "messages_received": coordinator.push_messages_received,
+            "connection_rejections": coordinator.push_connection_rejections,
             "messages_decoded": coordinator.push_messages_decoded,
             "decode_failures": coordinator.push_decode_failures,
             "state_decode_failures": coordinator.push_state_decode_failures,

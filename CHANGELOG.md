@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Reconnect MQTT push updates after a Home Server restart. The push listener
+  now retries every connection with the latest session's MQTT credentials and
+  topic prefix, forces a re-authentication when the broker rejects a
+  connection or subscription, and warns after repeated rejections instead of
+  failing silently at debug level.
+
 - Apply compatible decoded MQTT state events directly to Home Assistant instead
   of performing a full REST refresh after every message.
 - Coalesce schema-mismatch and decode-failure fallbacks, cap all full REST

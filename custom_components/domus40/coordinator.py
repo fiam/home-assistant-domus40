@@ -33,6 +33,7 @@ from .models import Domus40ButtonBinding, Domus40Device, Domus40State
 from .mqtt import (
     Domus40MqttClient,
     Domus40MqttError,
+    Domus40MqttRejectedError,
     topic_matches_subscription,
 )
 from .proto import (
@@ -63,6 +64,7 @@ BUTTON_MAPPING_CONCURRENCY = 2
 REPORTING_CONCURRENCY = 2
 REPORTING_BATCH_SIZE = 8
 MAX_UNKNOWN_SIGNATURES = 64
+MQTT_REJECT_WARNING_THRESHOLD = 3
 
 _SAFE_TOPIC_SEGMENTS = frozenset(
     {
@@ -222,6 +224,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self.wall_mappings_loaded = False
         self._button_listeners: set[Callable[[DeviceStateEvent], None]] = set()
         self.push_messages_received = 0
+        self.push_connection_rejections = 0
         self.push_messages_decoded = 0
         self.push_decode_failures = 0
         self.push_state_decode_failures = 0
@@ -670,23 +673,56 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             )
 
     async def _async_push_loop(self) -> None:
-        mqtt_info = self.client.mqtt_info
-        if mqtt_info is None:
+        if self.client.mqtt_info is None:
             return
         backoff = 1
+        consecutive_rejections = 0
+
+        def connected() -> None:
+            nonlocal backoff, consecutive_rejections
+            backoff = 1
+            if consecutive_rejections >= MQTT_REJECT_WARNING_THRESHOLD:
+                _LOGGER.warning("Domus40 MQTT push updates recovered")
+            consecutive_rejections = 0
+
         while True:
+            # The Home Server rotates the MQTT credentials and prefix when it
+            # restarts, so every attempt must use the latest retained fields.
+            mqtt_info = self.client.mqtt_info
             try:
+                if mqtt_info is None:
+                    raise Domus40MqttError("MQTT connection fields are unavailable")
                 mqtt = Domus40MqttClient(
                     self.client.base_url,
                     mqtt_info,
                     self._session,
                     self._async_handle_push,
                     self._mqtt_topics(),
+                    on_connected=connected,
                 )
                 await mqtt.async_listen()
-                backoff = 1
             except asyncio.CancelledError:
                 raise
+            except Domus40MqttRejectedError as err:
+                self.push_connection_rejections += 1
+                consecutive_rejections += 1
+                if consecutive_rejections == MQTT_REJECT_WARNING_THRESHOLD:
+                    _LOGGER.warning(
+                        "The Domus40 MQTT broker rejected %s consecutive "
+                        "connections; refreshing the session and retrying. "
+                        "Decoded push updates (instantaneous power and button "
+                        "events) stay unavailable until MQTT reconnects",
+                        consecutive_rejections,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Domus40 MQTT listener reconnecting after %s",
+                        type(err).__name__,
+                    )
+                try:
+                    await self.client.async_authenticate(force=True)
+                except Domus40Error:
+                    pass
             except (Domus40MqttError, aiohttp.ClientError, TimeoutError) as err:
                 _LOGGER.debug(
                     "Domus40 MQTT listener reconnecting after %s",

@@ -12,7 +12,10 @@ from aiohttp import web
 
 from custom_components.domus40.api import Domus40Client
 from custom_components.domus40.coordinator import _mapped_emitter_ids
-from custom_components.domus40.mqtt import Domus40MqttClient
+from custom_components.domus40.mqtt import (
+    Domus40MqttClient,
+    Domus40MqttRejectedError,
+)
 from custom_components.domus40.proto import (
     constants_schema_is_compatible,
     decode_device_instant_reading_event,
@@ -213,6 +216,56 @@ class MqttContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.endpoint, 9)
             self.assertEqual(event.button_state, 0)
             self.assertIsNone(event.energy_level)
+        finally:
+            if listener is not None:
+                listener.cancel()
+                await asyncio.gather(listener, return_exceptions=True)
+            await client.async_logout()
+            await session.close()
+            await runner.cleanup()
+
+    async def test_rotated_credentials_reject_then_reconnect(self) -> None:
+        app = create_app()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 9998)
+        await site.start()
+        session = aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True))
+        client = Domus40Client("http://127.0.0.1:9998", USERNAME, PASSWORD, session)
+        listener: asyncio.Task[None] | None = None
+        try:
+            await client.async_authenticate()
+            stale_info = client.mqtt_info
+            assert stale_info is not None
+
+            app[EMULATOR_KEY].rotate_mqtt_credentials()
+            stale = Domus40MqttClient(
+                client.base_url, stale_info, session, lambda _topic, _payload: None
+            )
+            with self.assertRaises(Domus40MqttRejectedError):
+                await stale.async_listen()
+
+            await client.async_authenticate(force=True)
+            fresh_info = client.mqtt_info
+            assert fresh_info is not None
+            self.assertNotEqual(fresh_info.password, stale_info.password)
+            connected: asyncio.Future[None] = (
+                asyncio.get_running_loop().create_future()
+            )
+
+            def on_connected() -> None:
+                if not connected.done():
+                    connected.set_result(None)
+
+            fresh = Domus40MqttClient(
+                client.base_url,
+                fresh_info,
+                session,
+                lambda _topic, _payload: None,
+                on_connected=on_connected,
+            )
+            listener = asyncio.create_task(fresh.async_listen())
+            await asyncio.wait_for(connected, 1)
         finally:
             if listener is not None:
                 listener.cancel()

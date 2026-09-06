@@ -11,12 +11,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from custom_components.domus40.coordinator import (
+    MQTT_REJECT_WARNING_THRESHOLD,
     REST_REFRESH_MIN_INTERVAL,
     WRITE_REFRESH_DELAYS,
     Domus40Coordinator,
     _PendingLevel,
 )
 from custom_components.domus40.models import Domus40State, MqttInfo
+from custom_components.domus40.mqtt import Domus40MqttRejectedError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 COMPONENT = Path(__file__).resolve().parents[2] / "custom_components" / "domus40"
@@ -205,6 +207,123 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.write_refresh_requests, 2)
         self.assertEqual(delays, list(WRITE_REFRESH_DELAYS[:2]))
         self.assertIsNone(coordinator._write_refresh_task)
+
+
+class PushReconnectTests(unittest.IsolatedAsyncioTestCase):
+    """Recover MQTT push after the Home Server rotates its credentials."""
+
+    def _reconnect_coordinator(self, client: object) -> Domus40Coordinator:
+        coordinator = object.__new__(Domus40Coordinator)
+        coordinator.client = client
+        coordinator._entry = SimpleNamespace(options={})
+        coordinator._session = None
+        coordinator.push_connection_rejections = 0
+        coordinator._async_handle_push = Mock()
+        return coordinator
+
+    async def test_rejection_refreshes_credentials_and_reconnects(self) -> None:
+        connected = asyncio.Event()
+
+        class RotatingClient:
+            base_url = "http://fixture.invalid"
+
+            def __init__(self) -> None:
+                self.mqtt_info = MqttInfo("fixture-user", "stale", "fixture/")
+                self.forced_authentications = 0
+
+            async def async_authenticate(self, *, force: bool = False) -> None:
+                self.forced_authentications += 1
+                self.mqtt_info = MqttInfo("fixture-user", "fresh", "fixture/")
+
+        class FakeMqtt:
+            def __init__(self, *args, on_connected=None, **kwargs) -> None:
+                self.info = args[1]
+                self.on_connected = on_connected
+
+            async def async_listen(self) -> None:
+                if self.info.password != "fresh":
+                    raise Domus40MqttRejectedError("rejected")
+                if self.on_connected is not None:
+                    self.on_connected()
+                connected.set()
+                await asyncio.Event().wait()
+
+        client = RotatingClient()
+        coordinator = self._reconnect_coordinator(client)
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(_delay: float) -> None:
+            await real_sleep(0)
+
+        with (
+            patch(
+                "custom_components.domus40.coordinator.Domus40MqttClient", FakeMqtt
+            ),
+            patch("custom_components.domus40.coordinator.asyncio.sleep", fast_sleep),
+        ):
+            task = asyncio.create_task(coordinator._async_push_loop())
+            try:
+                await asyncio.wait_for(connected.wait(), 1)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+        self.assertEqual(client.forced_authentications, 1)
+        self.assertEqual(coordinator.push_connection_rejections, 1)
+
+    async def test_repeated_rejections_warn_once(self) -> None:
+        threshold_reached = asyncio.Event()
+
+        class StubbornClient:
+            base_url = "http://fixture.invalid"
+
+            def __init__(self) -> None:
+                self.mqtt_info = MqttInfo("fixture-user", "stale", "fixture/")
+                self.forced_authentications = 0
+
+            async def async_authenticate(self, *, force: bool = False) -> None:
+                self.forced_authentications += 1
+                if self.forced_authentications >= MQTT_REJECT_WARNING_THRESHOLD:
+                    threshold_reached.set()
+
+        class RejectingMqtt:
+            def __init__(self, *args, on_connected=None, **kwargs) -> None:
+                pass
+
+            async def async_listen(self) -> None:
+                raise Domus40MqttRejectedError("rejected")
+
+        client = StubbornClient()
+        coordinator = self._reconnect_coordinator(client)
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(_delay: float) -> None:
+            await real_sleep(0)
+
+        with (
+            self.assertLogs(
+                "custom_components.domus40.coordinator", level="WARNING"
+            ) as captured,
+            patch(
+                "custom_components.domus40.coordinator.Domus40MqttClient",
+                RejectingMqtt,
+            ),
+            patch("custom_components.domus40.coordinator.asyncio.sleep", fast_sleep),
+        ):
+            task = asyncio.create_task(coordinator._async_push_loop())
+            try:
+                await asyncio.wait_for(threshold_reached.wait(), 1)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+        message = "\n".join(captured.output)
+        self.assertIn("consecutive", message)
+        self.assertGreaterEqual(
+            coordinator.push_connection_rejections, MQTT_REJECT_WARNING_THRESHOLD
+        )
+        warnings = sum("consecutive" in line for line in captured.output)
+        self.assertEqual(warnings, 1)
 
 
 class SchemaWarningTests(unittest.IsolatedAsyncioTestCase):
