@@ -45,7 +45,11 @@ class Domus40PowerSensor(Domus40Entity, SensorEntity):
     def native_value(self) -> float | None:
         """Return the latest milliwatt reading converted to watts."""
         reading = self.coordinator.power_readings.get(self._device_id)
-        return reading.power_w if reading is not None else None
+        if reading is None or not self.coordinator.power_reading_is_fresh(
+            self._device_id
+        ):
+            return None
+        return reading.power_w
 
     @property
     def available(self) -> bool:

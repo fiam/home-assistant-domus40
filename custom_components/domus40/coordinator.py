@@ -65,6 +65,11 @@ REPORTING_CONCURRENCY = 2
 REPORTING_BATCH_SIZE = 8
 MAX_UNKNOWN_SIGNATURES = 64
 MQTT_REJECT_WARNING_THRESHOLD = 3
+# One round-robin cycle visits every reporting batch once; readings older than
+# a few cycles mean the push pipeline stopped and must not read as current.
+METERING_BATCH_OVERHEAD_SECONDS = 5.0
+METERING_STALE_CYCLES = 3
+METERING_STALE_MIN_SECONDS = 120.0
 
 _SAFE_TOPIC_SEGMENTS = frozenset(
     {
@@ -217,6 +222,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self.schema_fields: dict[str, dict[str, str | int]] = {}
         self.metering_schema_fields: dict[str, dict[str, str | int]] = {}
         self.power_readings: dict[str, DeviceInstantReadingEvent] = {}
+        self.power_reading_recorded_at: dict[str, float] = {}
         self.reporting_active_ids: set[str] = set()
         self.reporting_activation_failures = 0
         self.button_bindings: dict[tuple[str, str], Domus40ButtonBinding] = {}
@@ -605,6 +611,27 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         except Domus40Error:
             pass
 
+    def power_reading_max_age_seconds(self) -> float:
+        """Return how long one instantaneous reading may pass as current."""
+        state = self.data
+        batch_count = (
+            len(_reporting_batches(state.metering_devices))
+            if state is not None and state.metering_devices
+            else 1
+        )
+        cycle = batch_count * (
+            METERING_SAMPLE_SECONDS + METERING_BATCH_OVERHEAD_SECONDS
+        )
+        return max(METERING_STALE_MIN_SECONDS, METERING_STALE_CYCLES * cycle)
+
+    def power_reading_is_fresh(self, device_id: str) -> bool:
+        """Return whether one device's last reading is recent enough to show."""
+        recorded_at = self.power_reading_recorded_at.get(device_id)
+        if recorded_at is None:
+            return False
+        age = asyncio.get_running_loop().time() - recorded_at
+        return age <= self.power_reading_max_age_seconds()
+
     def _record_unknown_message(self, topic: str, payload: bytes) -> None:
         """Record only a redacted topic shape and field/wire signature."""
         mqtt_info = self.client.mqtt_info
@@ -758,6 +785,9 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                     and reading.power_w is not None
                 ):
                     self.power_readings[reading.device_id] = reading
+                    self.power_reading_recorded_at[reading.device_id] = (
+                        asyncio.get_running_loop().time()
+                    )
                     self.push_power_updates += 1
                     self.async_update_listeners()
             return

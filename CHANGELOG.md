@@ -13,6 +13,9 @@ All notable changes to this project are documented here. The format follows
   topic prefix, forces a re-authentication when the broker rejects a
   connection or subscription, and warns after repeated rejections instead of
   failing silently at debug level.
+- Power sensors now report an unknown value when instantaneous readings stop
+  arriving instead of presenting the last reading as current indefinitely. A
+  reading expires after a bounded multiple of the metering round-robin cycle.
 
 - Apply compatible decoded MQTT state events directly to Home Assistant instead
   of performing a full REST refresh after every message.

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from custom_components.domus40.coordinator import (
+    METERING_STALE_MIN_SECONDS,
     MQTT_REJECT_WARNING_THRESHOLD,
     REST_REFRESH_MIN_INTERVAL,
     WRITE_REFRESH_DELAYS,
@@ -26,6 +27,8 @@ EVENTS_SCHEMA = (COMPONENT / "events.proto").read_text()
 CONSTANTS_SCHEMA = (COMPONENT / "constants.proto").read_text()
 STATE_TOPIC = "fixture/events/device/101/state/changed"
 STATE_PAYLOAD = b"\x0a\x00\x10\x65\xc8\x0c\x14"
+METERING_TOPIC = "fixture/events/device/101/reading/instant"
+METERING_PAYLOAD = b"\x0a\x00\x10\x65\x60\xb9\x60"
 
 
 def _fixture_state() -> Domus40State:
@@ -59,11 +62,13 @@ def _push_coordinator(state: Domus40State) -> Domus40Coordinator:
     coordinator.push_metering_messages = 0
     coordinator.push_power_updates = 0
     coordinator.power_readings = {}
+    coordinator.power_reading_recorded_at = {}
     coordinator.unknown_topic_shapes = Counter()
     coordinator.unknown_wire_signatures = Counter()
     coordinator.unknown_observations_dropped = 0
     coordinator._schedule_fallback_refresh = Mock()
     coordinator._schedule_write_refresh = Mock()
+    coordinator.async_update_listeners = Mock()
 
     def set_updated_data(updated: Domus40State) -> None:
         coordinator.data = updated
@@ -207,6 +212,43 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.write_refresh_requests, 2)
         self.assertEqual(delays, list(WRITE_REFRESH_DELAYS[:2]))
         self.assertIsNone(coordinator._write_refresh_task)
+
+
+class MeteringFreshnessTests(unittest.IsolatedAsyncioTestCase):
+    """Expire instantaneous readings instead of presenting them as current."""
+
+    async def asyncSetUp(self) -> None:
+        self.coordinator = _push_coordinator(_fixture_state())
+
+    async def test_reading_records_receipt_time_and_is_fresh(self) -> None:
+        before = asyncio.get_running_loop().time()
+
+        await self.coordinator._async_handle_push(METERING_TOPIC, METERING_PAYLOAD)
+
+        self.assertEqual(self.coordinator.power_readings["101"].power_w, 12.345)
+        self.assertGreaterEqual(
+            self.coordinator.power_reading_recorded_at["101"], before
+        )
+        self.assertTrue(self.coordinator.power_reading_is_fresh("101"))
+
+    async def test_reading_expires_after_the_maximum_age(self) -> None:
+        await self.coordinator._async_handle_push(METERING_TOPIC, METERING_PAYLOAD)
+
+        self.coordinator.power_reading_recorded_at["101"] -= (
+            self.coordinator.power_reading_max_age_seconds() + 1
+        )
+
+        self.assertFalse(self.coordinator.power_reading_is_fresh("101"))
+
+    async def test_device_without_reading_is_never_fresh(self) -> None:
+        self.assertFalse(self.coordinator.power_reading_is_fresh("101"))
+
+    async def test_maximum_age_has_a_floor_for_small_installations(self) -> None:
+        # The fixture's three metering rows fit one batch, so the floor wins.
+        self.assertEqual(
+            self.coordinator.power_reading_max_age_seconds(),
+            METERING_STALE_MIN_SECONDS,
+        )
 
 
 class PushReconnectTests(unittest.IsolatedAsyncioTestCase):
