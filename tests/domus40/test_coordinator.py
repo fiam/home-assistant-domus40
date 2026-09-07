@@ -196,6 +196,7 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         coordinator._write_refresh_task = asyncio.current_task()
         coordinator._shutting_down = False
         coordinator.write_refresh_requests = 0
+        coordinator._last_rest_update_success = True
         refreshes = 0
         delays: list[float] = []
 
@@ -307,10 +308,11 @@ class MeteringFreshnessTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_maximum_age_has_a_floor_for_small_installations(self) -> None:
         # The fixture's three metering rows fit one batch, so the floor wins.
-        self.assertEqual(
-            self.coordinator.power_reading_max_age_seconds(),
-            METERING_STALE_MIN_SECONDS,
-        )
+        with patch("custom_components.domus40.coordinator.REPORTING_COOLDOWN_SECONDS", 0):
+            self.assertEqual(
+                self.coordinator.power_reading_max_age_seconds(),
+                METERING_STALE_MIN_SECONDS,
+            )
 
 
 class PushReconnectTests(unittest.IsolatedAsyncioTestCase):
@@ -321,6 +323,9 @@ class PushReconnectTests(unittest.IsolatedAsyncioTestCase):
         coordinator.client = client
         coordinator._entry = SimpleNamespace(options={})
         coordinator._session = None
+        coordinator._mqtt_connected = asyncio.Event()
+        coordinator._mqtt_disconnected = asyncio.Event()
+        coordinator._mqtt_disconnected.set()
         coordinator.push_connection_rejections = 0
         coordinator._async_handle_push = Mock()
         return coordinator
@@ -368,12 +373,15 @@ class PushReconnectTests(unittest.IsolatedAsyncioTestCase):
             task = asyncio.create_task(coordinator._async_push_loop())
             try:
                 await asyncio.wait_for(connected.wait(), 1)
+                self.assertTrue(coordinator._mqtt_connected.is_set())
             finally:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
         self.assertEqual(client.forced_authentications, 1)
         self.assertEqual(coordinator.push_connection_rejections, 1)
+        self.assertFalse(coordinator._mqtt_connected.is_set())
+        self.assertTrue(coordinator._mqtt_disconnected.is_set())
 
     async def test_repeated_rejections_warn_once(self) -> None:
         threshold_reached = asyncio.Event()
@@ -437,8 +445,11 @@ class ReportingReconnectTests(unittest.IsolatedAsyncioTestCase):
         coordinator = _push_coordinator(_fixture_state())
         coordinator.reporting_active_ids = set()
         coordinator.reporting_activation_failures = 0
+        coordinator.reporting_release_failures = 0
+        coordinator._mqtt_connected = asyncio.Event()
+        coordinator._mqtt_disconnected = asyncio.Event()
+        coordinator._set_push_connected(True)
         coordinator.client.async_deactivate_reporting = AsyncMock()
-        coordinator._async_deactivate_reporting = AsyncMock()
         activations = 0
         active_samples: list[set[str]] = []
 
@@ -452,7 +463,7 @@ class ReportingReconnectTests(unittest.IsolatedAsyncioTestCase):
             prefix = coordinator.client.mqtt_info.prefix
             return f"{prefix}events/device/{device_id}/reading/instant"
 
-        async def sample(_delay: float) -> None:
+        async def sample() -> None:
             active_samples.append(set(coordinator.reporting_active_ids))
             if len(active_samples) == 2:
                 raise asyncio.CancelledError
@@ -463,14 +474,15 @@ class ReportingReconnectTests(unittest.IsolatedAsyncioTestCase):
                 "custom_components.domus40.coordinator._reporting_batches",
                 return_value=[["101"]],
             ),
-            patch("custom_components.domus40.coordinator.asyncio.sleep", sample),
+            patch.object(coordinator, "_async_wait_reporting_sample", sample),
+            patch("custom_components.domus40.coordinator.asyncio.sleep", AsyncMock()),
             self.assertRaises(asyncio.CancelledError),
         ):
             await coordinator._async_reporting_loop()
 
         self.assertEqual(active_samples, [{"101"}, {"101"}])
         self.assertEqual(coordinator.reporting_activation_failures, 0)
-        coordinator.client.async_deactivate_reporting.assert_not_awaited()
+        coordinator.client.async_deactivate_reporting.assert_awaited_once_with("101")
 
 
 class SchemaWarningTests(unittest.IsolatedAsyncioTestCase):

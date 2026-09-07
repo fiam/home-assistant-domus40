@@ -261,10 +261,25 @@ part of this supported contract and are deliberately not reproduced or guessed.
 
 Instantaneous readings require a temporary reporting lease per logical row.
 The Home Server can reject excessive concurrent leases. The integration
-therefore samples a bounded number of targets for a short period, releases
-them, and continues round-robin. Rows sharing a physical address are placed in
+therefore samples at most four targets for ten seconds, releases them, and
+waits thirty seconds before continuing round-robin. Failed activation or
+cleanup doubles the pause up to five minutes; a fully successful batch or
+cleanup resets it. A failed release retains its slot and blocks new leases
+until cleanup succeeds. Rows sharing a physical address are placed in
 different batches while each reading remains attributed by its logical
 `deviceId`.
+
+Only a subscribed MQTT connection permits new reporting leases. A disconnect
+interrupts sampling and triggers cleanup; no new leases are acquired until
+MQTT reconnects and the pause has elapsed. These pauses change client scheduling,
+not the private lease duration or payload contract. Reading expiry includes the
+normal pause when calculating the round-robin cycle.
+
+All JSON requests and schema downloads from one client share two HTTP slots.
+This includes authentication, command writes, and lease cleanup. The network
+timeout starts after a slot is acquired. Concurrent rejections of the same
+expired HTTP session share one re-authentication instead of forcing a login
+per rejected request.
 
 The private history endpoint has not been verified as a monotonic lifetime
 total, so its interval aggregates are not represented as Home Assistant

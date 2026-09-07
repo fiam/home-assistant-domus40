@@ -67,6 +67,7 @@ async def async_get_config_entry_diagnostics(
         },
         "push": {
             "mqtt_available": coordinator.client.mqtt_info is not None,
+            "mqtt_connected": coordinator._mqtt_connected.is_set(),
             "schema_compatible": coordinator.schema_compatible,
             "schema_fingerprint": coordinator.schema_fingerprint,
             "constants_schema_fingerprint": (coordinator.constants_schema_fingerprint),
@@ -97,6 +98,7 @@ async def async_get_config_entry_diagnostics(
             "reporting_activation_failures": (
                 coordinator.reporting_activation_failures
             ),
+            "reporting_release_failures": coordinator.reporting_release_failures,
             "messages_received": coordinator.push_metering_messages,
             "decode_failures": coordinator.push_metering_decode_failures,
             "power_updates": coordinator.push_power_updates,

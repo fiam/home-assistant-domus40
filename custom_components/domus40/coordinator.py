@@ -62,7 +62,9 @@ REST_REFRESH_MIN_INTERVAL = 5.0
 DECODE_WARNING_INTERVAL = 100
 BUTTON_MAPPING_CONCURRENCY = 2
 REPORTING_CONCURRENCY = 2
-REPORTING_BATCH_SIZE = 8
+REPORTING_BATCH_SIZE = 4
+REPORTING_COOLDOWN_SECONDS = 30.0
+REPORTING_BACKOFF_MAX_SECONDS = 300.0
 MAX_UNKNOWN_SIGNATURES = 64
 MQTT_REJECT_WARNING_THRESHOLD = 3
 # One round-robin cycle visits every reporting batch once; readings older than
@@ -203,6 +205,9 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self._entry = entry
         self._session = session
         self._push_task: asyncio.Task[None] | None = None
+        self._mqtt_connected = asyncio.Event()
+        self._mqtt_disconnected = asyncio.Event()
+        self._mqtt_disconnected.set()
         self._reporting_task: asyncio.Task[None] | None = None
         self._write_refresh_task: asyncio.Task[None] | None = None
         self._fallback_refresh_task: asyncio.Task[None] | None = None
@@ -213,6 +218,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self._fallback_refresh_requested = False
         self._last_fallback_refresh_at: float | None = None
         self._last_rest_refresh_at: float | None = None
+        self._last_rest_update_success = True
         self._rest_refresh_lock = asyncio.Lock()
         self._shutting_down = False
         self.schema_compatible = False
@@ -226,6 +232,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self._power_expiry_handle: asyncio.TimerHandle | None = None
         self.reporting_active_ids: set[str] = set()
         self.reporting_activation_failures = 0
+        self.reporting_release_failures = 0
         self.button_bindings: dict[tuple[str, str], Domus40ButtonBinding] = {}
         self.button_mapping_failures = 0
         self.wall_mappings_loaded = False
@@ -286,11 +293,14 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             try:
                 state = await self.client.async_get_state()
             except Domus40AuthError as err:
+                self._last_rest_update_success = False
                 raise ConfigEntryAuthFailed from err
             except Domus40Error as err:
+                self._last_rest_update_success = False
                 raise UpdateFailed(
                     "Unable to update from the Domus40 Home Server"
                 ) from err
+            self._last_rest_update_success = True
             state = _reconcile_pending_levels(state, self._pending_levels, loop.time())
             return _reconcile_pending_levels(
                 state, self._recent_push_levels, loop.time()
@@ -566,53 +576,75 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         batches = _reporting_batches(state.metering_devices)
         semaphore = asyncio.Semaphore(REPORTING_CONCURRENCY)
 
-        async def activate(device_id: str) -> tuple[str, bool]:
+        async def activate(device_id: str) -> bool | None:
             async with semaphore:
+                if not self._mqtt_connected.is_set():
+                    return None
                 try:
                     topic = await self.client.async_activate_reporting(device_id)
                 except asyncio.CancelledError:
                     raise
                 except Domus40Error:
-                    return device_id, False
+                    return False
+                # Retain each acquired lease immediately, including when the
+                # remaining activations are interrupted by unload/disconnect.
+                self.reporting_active_ids.add(device_id)
                 # Activating a lease may re-authenticate after a Home Server
                 # restart and replace the broker's credentials and prefix.
                 mqtt_info = self.client.mqtt_info
                 prefix = mqtt_info.prefix if mqtt_info is not None else ""
                 reporting_filter = f"{prefix}{MQTT_METERING_TOPIC}"
                 if not topic_matches_subscription(reporting_filter, topic):
-                    try:
-                        await self.client.async_deactivate_reporting(device_id)
-                    except Domus40Error:
-                        pass
-                    return device_id, False
-                return device_id, True
+                    return False
+                return True
 
         async def deactivate(device_id: str) -> None:
             async with semaphore:
                 await self._async_deactivate_reporting(device_id)
 
         batch_index = 0
+        cooldown = REPORTING_COOLDOWN_SECONDS
         while True:
-            batch = batches[batch_index]
-            batch_index = (batch_index + 1) % len(batches)
-            results = await asyncio.gather(*(activate(item) for item in batch))
-            active = {device_id for device_id, succeeded in results if succeeded}
-            self.reporting_activation_failures += len(batch) - len(active)
-            if active != self.reporting_active_ids:
-                self.reporting_active_ids = active
+            await self._mqtt_connected.wait()
+            failures = 0
+            # A failed release keeps its slot until cleanup succeeds. Do not
+            # accumulate leases on top of a batch the hub could not release.
+            if not self.reporting_active_ids:
+                batch = batches[batch_index]
+                batch_index = (batch_index + 1) % len(batches)
+                results = await asyncio.gather(*(activate(item) for item in batch))
+                failures = sum(result is False for result in results)
+                self.reporting_activation_failures += failures
                 self.async_update_listeners()
-            await asyncio.sleep(METERING_SAMPLE_SECONDS)
-            await asyncio.gather(*(deactivate(device_id) for device_id in active))
-            if self.reporting_active_ids:
-                self.reporting_active_ids.clear()
-                self.async_update_listeners()
+                if self.reporting_active_ids and not failures:
+                    await self._async_wait_reporting_sample()
+            await asyncio.gather(
+                *(deactivate(item) for item in tuple(self.reporting_active_ids))
+            )
+            self.async_update_listeners()
+            cooldown = (
+                min(cooldown * 2, REPORTING_BACKOFF_MAX_SECONDS)
+                if failures or self.reporting_active_ids
+                else REPORTING_COOLDOWN_SECONDS
+            )
+            await asyncio.sleep(cooldown)
+
+    async def _async_wait_reporting_sample(self) -> None:
+        """Stop sampling promptly when the MQTT connection goes away."""
+        try:
+            async with asyncio.timeout(METERING_SAMPLE_SECONDS):
+                await self._mqtt_disconnected.wait()
+        except TimeoutError:
+            pass
 
     async def _async_deactivate_reporting(self, device_id: str) -> None:
         """Best-effort release of one instantaneous reporting lease."""
         try:
             await self.client.async_deactivate_reporting(device_id)
         except Domus40Error:
-            pass
+            self.reporting_release_failures += 1
+        else:
+            self.reporting_active_ids.discard(device_id)
 
     def power_reading_max_age_seconds(self) -> float:
         """Return how long one instantaneous reading may pass as current."""
@@ -623,7 +655,9 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             else 1
         )
         cycle = batch_count * (
-            METERING_SAMPLE_SECONDS + METERING_BATCH_OVERHEAD_SECONDS
+            METERING_SAMPLE_SECONDS
+            + REPORTING_COOLDOWN_SECONDS
+            + METERING_BATCH_OVERHEAD_SECONDS
         )
         return max(METERING_STALE_MIN_SECONDS, METERING_STALE_CYCLES * cycle)
 
@@ -735,6 +769,16 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                 signature,
             )
 
+    @callback
+    def _set_push_connected(self, connected: bool) -> None:
+        """Gate reporting on a subscribed MQTT connection."""
+        if connected:
+            self._mqtt_disconnected.clear()
+            self._mqtt_connected.set()
+        else:
+            self._mqtt_connected.clear()
+            self._mqtt_disconnected.set()
+
     async def _async_push_loop(self) -> None:
         if self.client.mqtt_info is None:
             return
@@ -743,6 +787,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
 
         def connected() -> None:
             nonlocal backoff, consecutive_rejections
+            self._set_push_connected(True)
             backoff = 1
             if consecutive_rejections >= MQTT_REJECT_WARNING_THRESHOLD:
                 _LOGGER.warning("Domus40 MQTT push updates recovered")
@@ -763,7 +808,10 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                     self._mqtt_topics(),
                     on_connected=connected,
                 )
-                await mqtt.async_listen()
+                try:
+                    await mqtt.async_listen()
+                finally:
+                    self._set_push_connected(False)
             except asyncio.CancelledError:
                 raise
             except Domus40MqttRejectedError as err:
@@ -940,6 +988,14 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                     min(delay_index, len(WRITE_REFRESH_DELAYS) - 1)
                 ]
                 await asyncio.sleep(delay)
+                if not self._last_rest_update_success:
+                    # Failed reads never reach reconciliation. Let expired
+                    # commands fall back to normal polling instead of keeping
+                    # this faster retry loop alive throughout an outage.
+                    now = asyncio.get_running_loop().time()
+                    for device_id, pending in tuple(self._pending_levels.items()):
+                        if pending.expires_at <= now:
+                            self._pending_levels.pop(device_id)
                 if not self._pending_levels:
                     return
                 self.write_refresh_requests += 1
@@ -985,6 +1041,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
     async def async_shutdown(self) -> None:
         """Stop background work and revoke the Home Server session."""
         self._shutting_down = True
+        self._set_push_connected(False)
         await super().async_shutdown()
         if self._power_expiry_handle is not None:
             self._power_expiry_handle.cancel()

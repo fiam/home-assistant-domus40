@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Reduce metering load with four-device batches, ten-second samples, and a
+  thirty-second pause between batches. Pause lease acquisition while MQTT is
+  disconnected and release active leases promptly on disconnect.
+- Back off failed metering batches and cleanup attempts up to five minutes;
+  retain failed cleanup slots until released so leases cannot accumulate.
+- Limit all HTTP traffic from one integration client to two simultaneous
+  requests, including inventory, metering, commands, authentication, and schemas.
+  Concurrent session rejections now share one authentication recovery.
+- Stop fast command reconciliation after its deadline when REST reads keep
+  failing. Adjust power-reading expiry for the slower metering cycle.
+- Expose MQTT connection state and aggregate reporting-release failures in
+  privacy-preserving diagnostics.
+
 ## [0.10.1] - 2026-09-06
 
 ### Fixed

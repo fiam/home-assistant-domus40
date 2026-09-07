@@ -108,6 +108,36 @@ Assistant's coordinator cleanup to cancel scheduled refreshes. The existing
 English, Portuguese, and Spanish catalogs still pass the structural contract;
 this patch introduces no new user-interface translation keys.
 
+## Unreleased load controls
+
+Unreleased changes reduce reporting batches from eight to four logical devices
+and add a thirty-second pause after each ten-second sample.
+Failed batches or cleanup double the pause to at most five minutes. Cleanup
+failures retain their lease slots until release succeeds. Metering waits for a
+subscribed MQTT connection, interrupts sampling on disconnect, and tracks
+completed activations individually so unloading a partial batch releases them.
+Reading freshness includes the normal pause in the round-robin cycle.
+
+All HTTP requests from one client, including schema downloads and session
+recovery, share two concurrency slots. Network timeouts exclude time waiting
+for a slot. HTTP session generations coalesce concurrent expired-session
+responses into one authentication recovery. Failed command reads no longer
+keep fast reconciliation alive after the command deadline.
+
+These are scheduling changes to the existing private contracts; request
+payloads, schema validation, logical-device attribution, optimistic commands,
+and the full-REST-refresh limit remain unchanged. Sanitized regressions cover
+aggregate HTTP concurrency, shared authentication recovery, MQTT disconnect and
+reconnect, reporting cadence/backoff, failed cleanup, partial-batch unload, and
+command expiry during an outage in the exact supported Home Assistant images.
+An emulator measurement with eight synthetic metering devices reduced steady
+lease traffic from about 94 to 12 HTTP requests per minute; an overlapping full
+refresh and metering batch peaked at two HTTP requests instead of five.
+No new user-interface translation keys are introduced; all three catalogs
+remain covered by the structural contract. Physical Home Server load acceptance
+is still pending before release; the emulator cannot establish hub capacity.
+The manifest and verified release baseline remain at 0.10.1 until release.
+
 ## Migration procedure
 
 1. Select an exact Home Assistant patch release; never test against a moving

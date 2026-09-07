@@ -17,6 +17,8 @@ from .models import (
     MqttInfo,
 )
 
+HTTP_CONCURRENCY = 2
+
 
 class Domus40Error(Exception):
     """Base exception for Domus40 communication failures."""
@@ -94,6 +96,8 @@ class Domus40Client:
         self._csrf_token: str | None = None
         self._authenticated = False
         self._auth_lock = asyncio.Lock()
+        self._auth_generation = 0
+        self._http_semaphore = asyncio.Semaphore(HTTP_CONCURRENCY)
         self.mqtt_info: MqttInfo | None = None
 
     def _url(self, endpoint: str) -> str:
@@ -108,7 +112,11 @@ class Domus40Client:
         params: dict[str, Any] | None = None,
     ) -> tuple[int, Any]:
         try:
-            async with asyncio.timeout(DEFAULT_REQUEST_TIMEOUT):
+            # Waiting for another request must not consume the network timeout.
+            async with (
+                self._http_semaphore,
+                asyncio.timeout(DEFAULT_REQUEST_TIMEOUT),
+            ):
                 async with self._session.request(
                     method,
                     self._url(endpoint),
@@ -183,6 +191,7 @@ class Domus40Client:
 
     def _finish_authentication(self, payload: Any) -> None:
         self._authenticated = True
+        self._auth_generation += 1
         if isinstance(payload, dict):
             self.mqtt_info = MqttInfo.from_api(payload.get("mqttInfo"))
 
@@ -196,12 +205,16 @@ class Domus40Client:
         retry_auth: bool = True,
     ) -> Any:
         await self.async_authenticate()
+        generation = self._auth_generation
         status, payload = await self._raw_json(
             method, endpoint, json=json, params=params
         )
         if status == 403 and retry_auth:
-            self._authenticated = False
-            await self.async_authenticate(force=True)
+            # Concurrent requests can all reject the same expired session.
+            # Reuse recovery already in progress or completed by another request.
+            if generation == self._auth_generation:
+                self._authenticated = False
+            await self.async_authenticate()
             return await self._authorized_json(
                 method,
                 endpoint,
@@ -274,7 +287,10 @@ class Domus40Client:
             raise ValueError("Unsupported Domus40 protobuf schema")
         await self.async_authenticate()
         try:
-            async with asyncio.timeout(DEFAULT_REQUEST_TIMEOUT):
+            async with (
+                self._http_semaphore,
+                asyncio.timeout(DEFAULT_REQUEST_TIMEOUT),
+            ):
                 async with self._session.get(
                     self._url(f"/static/protos/{filename}")
                 ) as response:

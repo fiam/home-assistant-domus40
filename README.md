@@ -128,9 +128,12 @@ under **Settings → Devices & services → EFAPEL Domus40 → Configure**.
 ### Power measurements
 
 Every metering-capable logical row exposes an instantaneous power sensor in
-watts. The integration acquires short reporting leases in bounded round-robin
-batches to avoid overloading the Home Server. It does not expose the private
-history values as lifetime energy because they have not been verified as a
+watts. The integration samples up to four logical devices for ten seconds,
+then pauses for thirty seconds before the next round-robin batch. Larger
+installations therefore receive less frequent power readings. Metering pauses
+while MQTT is disconnected, and failed batches or lease cleanup back off up to
+five minutes. It does not expose the private history values as lifetime energy
+because they have not been verified as a
 monotonic total. A Home Assistant Integration helper can derive kWh from the
 power sensor when needed.
 
@@ -151,8 +154,10 @@ power sensor when needed.
 
 The integration polls authoritative state every 30 seconds and applies valid
 local MQTT-over-WebSocket state events directly in memory. Full REST refreshes
-are globally capped at one every five seconds. Commands update Home Assistant
-optimistically while the integration reconciles a temporarily stale REST view.
+are globally capped at one every five seconds; each refresh makes three HTTP
+requests. All HTTP traffic from one integration client shares a limit of two
+simultaneous requests. Commands update Home Assistant optimistically while the
+integration reconciles a temporarily stale REST view.
 No distinct blind stop command has been verified, so one is not advertised.
 
 ## Protocol and development
