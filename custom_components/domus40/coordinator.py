@@ -306,6 +306,16 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                 state, self._recent_push_levels, loop.time()
             )
 
+    @callback
+    def _async_set_local_data(self, state: Domus40State) -> None:
+        """Publish a partial update without postponing authoritative polling."""
+        # HA's async_set_updated_data resets the polling interval and cancels
+        # queued refreshes. One device's push or optimistic command cannot
+        # replace the full REST read needed to recover another missed update.
+        self.data = state
+        self.last_update_success = True
+        self.async_update_listeners()
+
     async def async_set_device_level(self, device_id: str, level: int) -> None:
         """Write a level without exposing the Home Server's stale readback."""
         bounded = max(0, min(100, level))
@@ -316,7 +326,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         )
         self._recent_push_levels.pop(device_id, None)
         if self.data is not None:
-            self.async_set_updated_data(self.data.with_device_level(device_id, bounded))
+            self._async_set_local_data(self.data.with_device_level(device_id, bounded))
         self._schedule_write_refresh()
 
     async def async_identify_device(self, device_id: str) -> None:
@@ -914,7 +924,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                     event.energy_level,
                     asyncio.get_running_loop().time() + WRITE_CONFIRM_TIMEOUT,
                 )
-                self.async_set_updated_data(
+                self._async_set_local_data(
                     self.data.with_device_level(event.device_id, event.energy_level)
                 )
                 self.push_state_updates += 1

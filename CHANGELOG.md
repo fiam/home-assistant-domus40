@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Preserve periodic polling and queued REST reconciliation during decoded
+  state pushes and optimistic commands, so unrelated device traffic cannot
+  leave a missed light update stuck indefinitely.
 - Reduce metering load with four-device batches, ten-second samples, and a
   thirty-second pause between batches. Pause lease acquisition while MQTT is
   disconnected and release active leases promptly on disconnect.

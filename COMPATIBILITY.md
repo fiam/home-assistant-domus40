@@ -138,6 +138,18 @@ remain covered by the structural contract. Physical Home Server load acceptance
 is still pending before release; the emulator cannot establish hub capacity.
 The manifest and verified release baseline remain at 0.10.1 until release.
 
+Partial state updates now notify coordinator listeners without resetting the
+periodic REST timer or cancelling queued refresh requests. Home Assistant's
+`async_set_updated_data` does both in the exact 2026.8.0 and 2026.9.0 images;
+using it for one device's push or optimistic command could indefinitely defer
+recovery of another device's missed state event. Synthetic regressions exercise
+the real coordinator scheduler with continuous unrelated push traffic and
+queued REST refreshes, preserving optimistic state and the five-second full
+refresh limit. Contract-test containers have external networking disabled;
+their emulator traffic stays on loopback. Polling still depends on the Home
+Server returning a current inventory; it cannot repair stale state inside the
+Home Server itself.
+
 ## Migration procedure
 
 1. Select an exact Home Assistant patch release; never test against a moving

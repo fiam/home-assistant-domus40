@@ -22,7 +22,7 @@ tasks:
       - for:
           var: HOME_ASSISTANT_VERSIONS
         cmd: >-
-          docker run --rm
+          docker run --rm --network none
           -v "{{.ROOT_DIR}}:/work:ro"
           -w /work
           -e PYTHONPATH=/work

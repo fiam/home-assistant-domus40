@@ -138,7 +138,7 @@ class MeteringLoadTests(unittest.IsolatedAsyncioTestCase):
             # A push immediately after each failed poll marks the HA coordinator
             # successful again, but the REST reconciliation is still failing.
             asyncio.get_running_loop().call_soon(
-                self.coordinator.async_set_updated_data,
+                self.coordinator._async_set_local_data,
                 self.coordinator.data.with_device_level("102", 20),
             )
             raise Domus40ConnectionError("Synthetic unavailable server")

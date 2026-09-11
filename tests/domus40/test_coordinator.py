@@ -6,6 +6,7 @@ import asyncio
 import json
 import unittest
 from collections import Counter
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -255,6 +256,67 @@ class CoordinatorRefreshIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.coordinator.push_state_updates, 200)
         self.assertEqual(self.refresh_times, [])
         self.assertEqual(self.coordinator.data.devices["101"].level, 20)
+
+    async def test_unrelated_push_traffic_does_not_starve_missed_state_poll(self) -> None:
+        # The final light update was lost. Other devices still publish while
+        # the authoritative inventory already contains the corrected level.
+        self.coordinator.data = self.coordinator.data.with_device_level("101", 15)
+        self.coordinator.update_interval = timedelta(seconds=2)
+        observations = []
+        remove_listener = self.coordinator.async_add_listener(
+            lambda: observations.append(self.coordinator.data.devices["101"].level)
+        )
+
+        async def publish_unrelated_updates() -> None:
+            while True:
+                await self.coordinator._async_handle_push(
+                    "fixture/events/device/102/state/changed",
+                    b"\x0a\x00\x10\x66\xc8\x0c\x14",
+                )
+                await asyncio.sleep(0.02)
+
+        traffic = asyncio.create_task(publish_unrelated_updates())
+        try:
+            await asyncio.wait_for(self.refreshed.wait(), 3)
+            await asyncio.sleep(0)
+            self.assertEqual(self.coordinator.data.devices["101"].level, 73)
+            self.assertEqual(observations[0], 15)
+            self.assertIn(73, observations)
+            self.assertEqual(len(self.refresh_times), 1)
+        finally:
+            traffic.cancel()
+            await asyncio.gather(traffic, return_exceptions=True)
+            remove_listener()
+
+    async def test_decoded_push_preserves_queued_rest_refresh(self) -> None:
+        self.coordinator._debounced_refresh.cooldown = 0.05
+        self.coordinator._debounced_refresh.immediate = False
+        await self.coordinator._async_request_coordinated_refresh()
+
+        for _ in range(200):
+            await self.coordinator._async_handle_push(STATE_TOPIC, STATE_PAYLOAD)
+
+        await asyncio.wait_for(self.refreshed.wait(), 1)
+        self.assertEqual(len(self.refresh_times), 1)
+
+    async def test_optimistic_command_preserves_queued_rest_refresh(self) -> None:
+        self.coordinator.client.async_set_level = AsyncMock()
+        self.coordinator._debounced_refresh.cooldown = 0.05
+        self.coordinator._debounced_refresh.immediate = False
+        observations = []
+        remove_listener = self.coordinator.async_add_listener(
+            lambda: observations.append(self.coordinator.data.devices["101"].level)
+        )
+        try:
+            await self.coordinator._async_request_coordinated_refresh()
+            with patch.object(self.coordinator, "_schedule_write_refresh"):
+                await self.coordinator.async_set_device_level("101", 42)
+            self.assertEqual(observations, [42])
+            await asyncio.wait_for(self.refreshed.wait(), 1)
+            self.assertEqual(len(self.refresh_times), 1)
+            self.assertEqual(self.coordinator.data.devices["101"].level, 42)
+        finally:
+            remove_listener()
 
     async def test_fallback_burst_coalesces_behind_global_rest_limit(self) -> None:
         await self.coordinator.async_refresh()

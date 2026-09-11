@@ -125,6 +125,9 @@ and reconciles REST state with bounded backoff. Compatible decoded push events
 update the in-memory state immediately and can settle a pending command without
 a REST request. Their values are protected briefly from a lagging REST readback.
 All full REST refreshes share a global limit of one every five seconds.
+Partial push updates and optimistic commands preserve the periodic polling
+schedule and any queued REST refresh, so continued traffic for other devices
+cannot postpone recovery of a missed state event indefinitely.
 
 For `LightingRegulator`, `levelPercentage` is the authoritative on/off and
 brightness value because `switchedOn` is not consistently authoritative for
