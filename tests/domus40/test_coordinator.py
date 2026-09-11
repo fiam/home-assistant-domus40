@@ -51,6 +51,9 @@ def _push_coordinator(state: Domus40State) -> Domus40Coordinator:
     coordinator.schema_compatible = True
     coordinator.metering_schema_compatible = True
     coordinator.metering_enabled = True
+    coordinator.reporting_activation_attempts = 0
+    coordinator.reporting_activation_failure_reasons = Counter()
+    coordinator.reporting_release_failure_reasons = Counter()
     coordinator._pending_levels = {}
     coordinator._recent_push_levels = {}
     coordinator._button_listeners = set()
@@ -407,6 +410,7 @@ class PushReconnectTests(unittest.IsolatedAsyncioTestCase):
         coordinator._mqtt_disconnected = asyncio.Event()
         coordinator._mqtt_disconnected.set()
         coordinator.push_connection_rejections = 0
+        coordinator.push_rejection_reasons = Counter()
         coordinator._async_handle_push = Mock()
         return coordinator
 

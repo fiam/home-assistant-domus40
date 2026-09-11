@@ -242,8 +242,9 @@ class MqttContractTests(unittest.IsolatedAsyncioTestCase):
             stale = Domus40MqttClient(
                 client.base_url, stale_info, session, lambda _topic, _payload: None
             )
-            with self.assertRaises(Domus40MqttRejectedError):
+            with self.assertRaises(Domus40MqttRejectedError) as rejected:
                 await stale.async_listen()
+            self.assertEqual(rejected.exception.reason, "connack_5")
 
             await client.async_authenticate(force=True)
             fresh_info = client.mqtt_info

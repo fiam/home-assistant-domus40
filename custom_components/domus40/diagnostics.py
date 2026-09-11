@@ -74,6 +74,7 @@ async def async_get_config_entry_diagnostics(
             "device_state_fields": coordinator.schema_fields,
             "messages_received": coordinator.push_messages_received,
             "connection_rejections": coordinator.push_connection_rejections,
+            "rejection_reasons": dict(coordinator.push_rejection_reasons),
             "messages_decoded": coordinator.push_messages_decoded,
             "decode_failures": coordinator.push_decode_failures,
             "state_decode_failures": coordinator.push_state_decode_failures,
@@ -98,6 +99,13 @@ async def async_get_config_entry_diagnostics(
             "reporting_target_count": len(coordinator.data.metering_devices),
             "reporting_activation_failures": (
                 coordinator.reporting_activation_failures
+            ),
+            "reporting_activation_attempts": coordinator.reporting_activation_attempts,
+            "reporting_activation_failure_reasons": dict(
+                coordinator.reporting_activation_failure_reasons
+            ),
+            "reporting_release_failure_reasons": dict(
+                coordinator.reporting_release_failure_reasons
             ),
             "reporting_release_failures": coordinator.reporting_release_failures,
             "messages_received": coordinator.push_metering_messages,

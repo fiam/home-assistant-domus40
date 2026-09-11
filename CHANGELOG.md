@@ -12,6 +12,9 @@ All notable changes to this project are documented here. The format follows
   while device commands, state updates, and polling remain active. Disabling it
   releases retained reporting leases and clears stale power values. English,
   Portuguese, and Spanish translations are included.
+- Distinguish reporting HTTP failures, timeouts, and topic mismatches in
+  diagnostics, and retain MQTT rejection packet types and return codes without
+  connection details or response bodies.
 
 ### Fixed
 

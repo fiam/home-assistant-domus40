@@ -29,6 +29,20 @@ class Domus40MqttRejectedError(Domus40MqttError):
     stale rather than permanently invalid.
     """
 
+    def __init__(
+        self, message: str, *, packet: str = "unknown", return_code: int | None = None
+    ) -> None:
+        super().__init__(message)
+        self.packet = packet
+        self.return_code = return_code
+
+    @property
+    def reason(self) -> str:
+        """Return a bounded diagnostic label without connection information."""
+        if self.packet in {"connack", "suback"} and self.return_code in range(256):
+            return f"{self.packet}_{self.return_code}"
+        return "unspecified"
+
 
 def _mqtt_string(value: str | bytes) -> bytes:
     encoded = value.encode() if isinstance(value, str) else value
@@ -181,7 +195,11 @@ class Domus40MqttClient:
             if packet_type != 2 or len(body) < 2:
                 raise Domus40MqttError("MQTT broker sent an invalid CONNACK")
             if body[1] != 0:
-                raise Domus40MqttRejectedError("MQTT broker rejected the connection")
+                raise Domus40MqttRejectedError(
+                    "MQTT broker rejected the connection",
+                    packet="connack",
+                    return_code=body[1],
+                )
 
             for packet_id, topic in enumerate(self._topics, start=1):
                 await websocket.send_bytes(_subscribe_packet(topic, packet_id))
@@ -194,7 +212,9 @@ class Domus40MqttClient:
                     packet_id = int.from_bytes(body[:2], "big")
                     if body[2] == 0x80:
                         raise Domus40MqttRejectedError(
-                            "MQTT broker rejected a subscription"
+                            "MQTT broker rejected a subscription",
+                            packet="suback",
+                            return_code=body[2],
                         )
                     pending_subacks.discard(packet_id)
                 elif packet_type == 3:

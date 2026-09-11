@@ -14,7 +14,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import Domus40AuthError, Domus40Client, Domus40Error
+from .api import (
+    Domus40AuthError,
+    Domus40Client,
+    Domus40Error,
+    Domus40ReportingTopicError,
+    Domus40ResponseError,
+)
 from .const import (
     BUTTON_ENDPOINTS,
     BUTTON_STATES,
@@ -141,6 +147,19 @@ def _mapped_emitter_ids(
     }
 
 
+def _reporting_failure_reason(error: Domus40Error) -> str:
+    """Classify a failure without retaining private messages or response bodies."""
+    if isinstance(error, Domus40AuthError):
+        return "authentication"
+    if isinstance(error, Domus40ResponseError) and 100 <= error.status <= 599:
+        return f"http_{error.status}"
+    if isinstance(error, Domus40ReportingTopicError):
+        return "invalid_topic"
+    if isinstance(error.__cause__, TimeoutError):
+        return "timeout"
+    return "connection_or_response"
+
+
 def _reporting_batches(
     devices: Iterable[Domus40Device], batch_size: int = REPORTING_BATCH_SIZE
 ) -> tuple[tuple[str, ...], ...]:
@@ -238,12 +257,16 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self.reporting_active_ids: set[str] = set()
         self.reporting_activation_failures = 0
         self.reporting_release_failures = 0
+        self.reporting_activation_attempts = 0
+        self.reporting_activation_failure_reasons: Counter[str] = Counter()
+        self.reporting_release_failure_reasons: Counter[str] = Counter()
         self.button_bindings: dict[tuple[str, str], Domus40ButtonBinding] = {}
         self.button_mapping_failures = 0
         self.wall_mappings_loaded = False
         self._button_listeners: set[Callable[[DeviceStateEvent], None]] = set()
         self.push_messages_received = 0
         self.push_connection_rejections = 0
+        self.push_rejection_reasons: Counter[str] = Counter()
         self.push_messages_decoded = 0
         self.push_decode_failures = 0
         self.push_state_decode_failures = 0
@@ -626,10 +649,15 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                 if not self.metering_enabled or not self._mqtt_connected.is_set():
                     return None
                 try:
+                    self.reporting_activation_attempts += 1
                     topic = await self.client.async_activate_reporting(device_id)
                 except asyncio.CancelledError:
                     raise
-                except Domus40Error:
+                except Domus40Error as error:
+                    self.reporting_activation_failures += 1
+                    self.reporting_activation_failure_reasons[
+                        _reporting_failure_reason(error)
+                    ] += 1
                     return False
                 # Retain each acquired lease immediately, including when the
                 # remaining activations are interrupted by unload/disconnect.
@@ -640,6 +668,8 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                 prefix = mqtt_info.prefix if mqtt_info is not None else ""
                 reporting_filter = f"{prefix}{MQTT_METERING_TOPIC}"
                 if not topic_matches_subscription(reporting_filter, topic):
+                    self.reporting_activation_failures += 1
+                    self.reporting_activation_failure_reasons["topic_mismatch"] += 1
                     return False
                 return True
 
@@ -662,7 +692,6 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                 batch_index = (batch_index + 1) % len(batches)
                 results = await asyncio.gather(*(activate(item) for item in batch))
                 failures = sum(result is False for result in results)
-                self.reporting_activation_failures += failures
                 self.async_update_listeners()
                 if self.reporting_active_ids and not failures:
                     await self._async_wait_reporting_sample()
@@ -691,8 +720,11 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         """Best-effort release of one instantaneous reporting lease."""
         try:
             await self.client.async_deactivate_reporting(device_id)
-        except Domus40Error:
+        except Domus40Error as error:
             self.reporting_release_failures += 1
+            self.reporting_release_failure_reasons[
+                _reporting_failure_reason(error)
+            ] += 1
         else:
             self.reporting_active_ids.discard(device_id)
 
@@ -866,6 +898,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                 raise
             except Domus40MqttRejectedError as err:
                 self.push_connection_rejections += 1
+                self.push_rejection_reasons[err.reason] += 1
                 consecutive_rejections += 1
                 if consecutive_rejections == MQTT_REJECT_WARNING_THRESHOLD:
                     _LOGGER.warning(

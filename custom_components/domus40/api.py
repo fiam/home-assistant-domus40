@@ -32,6 +32,18 @@ class Domus40AuthError(Domus40Error):
     """The Home Server rejected the credentials or session."""
 
 
+class Domus40ResponseError(Domus40ConnectionError):
+    """An unsuccessful HTTP response, retaining only its status code."""
+
+    def __init__(self, status: int) -> None:
+        self.status = status
+        super().__init__(f"Home Server API request returned status {status}")
+
+
+class Domus40ReportingTopicError(Domus40ConnectionError):
+    """The reporting response did not contain a usable topic."""
+
+
 def base_url_from_location(location: str) -> str:
     """Return the HTTP origin from an SSDP description location."""
     parsed = urlsplit(location)
@@ -225,9 +237,7 @@ class Domus40Client:
         if status == 403:
             raise Domus40AuthError("Home Server session was rejected")
         if status < 200 or status >= 300:
-            raise Domus40ConnectionError(
-                f"Home Server API request returned status {status}"
-            )
+            raise Domus40ResponseError(status)
         return payload
 
     async def async_get_state(self) -> Domus40State:
@@ -272,7 +282,7 @@ class Domus40Client:
         )
         topic = payload.get("topic") if isinstance(payload, dict) else None
         if not isinstance(topic, str) or not topic:
-            raise Domus40ConnectionError(
+            raise Domus40ReportingTopicError(
                 "Home Server returned an invalid reporting topic"
             )
         return topic

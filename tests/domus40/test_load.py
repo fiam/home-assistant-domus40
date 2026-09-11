@@ -15,7 +15,11 @@ import aiohttp
 from aiohttp import web
 from homeassistant.core import HomeAssistant
 
-from custom_components.domus40.api import Domus40Client, Domus40ConnectionError
+from custom_components.domus40.api import (
+    Domus40Client,
+    Domus40ConnectionError,
+    Domus40ResponseError,
+)
 from custom_components.domus40.const import CONF_ENABLE_METERING
 from custom_components.domus40.coordinator import Domus40Coordinator
 from custom_components.domus40.models import Domus40State, MqttInfo
@@ -40,6 +44,7 @@ class HttpLoadTests(unittest.IsolatedAsyncioTestCase):
         self.peak = 0
         self.calls = Counter()
         self.reject_session = False
+        self.reject_reporting = False
 
         @web.middleware
         async def observe(request, handler):
@@ -48,6 +53,10 @@ class HttpLoadTests(unittest.IsolatedAsyncioTestCase):
             self.calls[request.path] += 1
             try:
                 await asyncio.sleep(0.02)
+                if self.reject_reporting and request.path.endswith('/reporting'):
+                    return web.json_response(
+                        {"detail": "synthetic-private-response"}, status=503
+                    )
                 if self.reject_session and request.path.endswith(
                     ("getDevices", "getDivisions", "getAreas")
                 ):
@@ -96,6 +105,14 @@ class HttpLoadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state.devices)
         self.assertEqual(self.calls["/HsAPI/users/valid"], 1)
         self.assertEqual(self.calls["/HsAPI/authentication"], 2)
+
+    async def test_reporting_error_retains_status_without_response_body(self) -> None:
+        self.reject_reporting = True
+        with self.assertRaises(Domus40ResponseError) as rejected:
+            await self.client.async_activate_reporting("101")
+        self.assertEqual(rejected.exception.status, 503)
+        self.assertNotIn("synthetic-private-response", str(rejected.exception))
+
 
 class MeteringLoadTests(unittest.IsolatedAsyncioTestCase):
     """Keep reporting work bounded even when the hub or MQTT is unavailable."""
@@ -236,6 +253,31 @@ class MeteringLoadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pauses, [60])
         self.assertEqual(self.client.async_deactivate_reporting.await_count, 2)
         self.client.async_activate_reporting.assert_not_awaited()
+        self.assertFalse(self.coordinator.reporting_active_ids)
+
+    async def test_activation_failures_distinguish_http_and_topic_mismatch(self) -> None:
+        async def activate(device_id):
+            if device_id == "101":
+                raise Domus40ResponseError(503)
+            return "synthetic-private-topic"
+
+        async def pause(_delay):
+            raise asyncio.CancelledError
+
+        self.client.async_activate_reporting.side_effect = activate
+        self.coordinator._set_push_connected(True)
+        with (
+            patch("custom_components.domus40.coordinator.asyncio.sleep", pause),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await self.coordinator._async_reporting_loop()
+        self.assertEqual(self.coordinator.reporting_activation_attempts, 3)
+        self.assertEqual(self.coordinator.reporting_activation_failures, 3)
+        self.assertEqual(
+            self.coordinator.reporting_activation_failure_reasons,
+            {"http_503": 1, "topic_mismatch": 2},
+        )
+        self.assertEqual(self.client.async_deactivate_reporting.await_count, 2)
         self.assertFalse(self.coordinator.reporting_active_ids)
 
     async def test_disabling_releases_completed_part_of_an_activation_batch(self) -> None:

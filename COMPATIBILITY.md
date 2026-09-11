@@ -163,6 +163,22 @@ their emulator traffic stays on loopback. Polling still depends on the Home
 Server returning a current inventory; it cannot repair stale state inside the
 Home Server itself.
 
+Reporting diagnostics retain bounded reason counters and activation attempts,
+including unsuccessful HTTP status codes, invalid/mismatched topics,
+authentication failures, and timeouts. MQTT rejection diagnostics retain only
+CONNACK/SUBACK return codes. Response bodies, exception messages from transports,
+topics, credentials, and logical identifiers are excluded. Sanitized emulator
+contracts verify HTTP status attribution and MQTT credential rejection codes;
+coordinator tests distinguish HTTP failure from a mismatched reporting topic
+and retain failure accounting when batches are interrupted.
+
+A bounded live check on 2026.9.0 observed successful state and button decoding,
+continued periodic polling, and HTTP 412 reporting rejections while MQTT remained
+connected. The native options flow paused sampling and cleared power values
+without making entities unavailable. This validates those integration paths;
+it does not establish the Home Server's capacity or the private condition behind
+the HTTP 412 responses. Sustained physical load acceptance remains pending.
+
 ## Migration procedure
 
 1. Select an exact Home Assistant patch release; never test against a moving
