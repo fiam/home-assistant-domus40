@@ -10,7 +10,9 @@ import aiohttp
 import voluptuous as vol
 from homeassistant.components import ssdp
 from homeassistant.config_entries import (
+    SOURCE_IGNORE,
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -126,8 +128,61 @@ class Domus40ConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_discover(self) -> None:
         discoveries = await ssdp.async_get_discovery_info_by_st(self.hass, DISCOVERY_ST)
         self._discoveries = {
-            _unique_id(info): info for info in discoveries if _is_domus40(info)
+            _unique_id(info): info
+            for info in discoveries
+            if _is_domus40(info)
+            and info.ssdp_location
+            and self._matching_entry(
+                base_url_from_location(info.ssdp_location), _unique_id(info)
+            ) is None
         }
+
+    @callback
+    def _matching_entry(
+        self, base_url: str, discovered_udn: str | None = None
+    ) -> ConfigEntry | None:
+        """Match retained discovery identity first, then the configured origin."""
+        entries = self._async_current_entries()
+        if discovered_udn is not None:
+            for entry in entries:
+                if discovered_udn in {
+                    entry.unique_id,
+                    entry.data.get(CONF_SERVER_UDN),
+                }:
+                    return entry
+        for entry in entries:
+            configured_url = entry.data.get(CONF_BASE_URL)
+            if not isinstance(configured_url, str):
+                continue
+            try:
+                if base_url_from_host(configured_url) == base_url:
+                    return entry
+            except Domus40ConnectionError:
+                continue
+        return None
+
+    @callback
+    def _async_abort_if_configured(
+        self, base_url: str, discovered_udn: str | None = None
+    ) -> ConfigFlowResult | None:
+        """Recognize a restarted hub without changing registry identities."""
+        if (entry := self._matching_entry(base_url, discovered_udn)) is None:
+            return None
+        if entry.source != SOURCE_IGNORE:
+            # The private SSDP UUID can change after a Home Server restart.
+            # Retain it as a discovery alias; entry.unique_id also prefixes
+            # entity/device identities and must remain unchanged.
+            data = {**entry.data, CONF_BASE_URL: base_url}
+            if discovered_udn is not None:
+                data[CONF_SERVER_UDN] = discovered_udn
+            address_changed = entry.data.get(CONF_BASE_URL) != base_url
+            self.hass.config_entries.async_update_entry(entry, data=data)
+            if address_changed and entry.state in {
+                ConfigEntryState.LOADED,
+                ConfigEntryState.SETUP_RETRY,
+            }:
+                self.hass.config_entries.async_schedule_reload(entry.entry_id)
+        return self.async_abort(reason="already_configured")
 
     async def _async_finish(
         self, info: SsdpServiceInfo, user_input: dict[str, Any], step_id: str
@@ -137,6 +192,8 @@ class Domus40ConfigFlow(ConfigFlow, domain=DOMAIN):
             if not info.ssdp_location:
                 raise Domus40ConnectionError("Discovery has no description location")
             base_url = base_url_from_location(info.ssdp_location)
+            if result := self._async_abort_if_configured(base_url, _unique_id(info)):
+                return result
             await _validate(self, base_url, user_input)
         except Domus40AuthError:
             errors["base"] = "invalid_auth"
@@ -157,6 +214,8 @@ class Domus40ConfigFlow(ConfigFlow, domain=DOMAIN):
             )
 
         unique_id = _unique_id(info)
+        if result := self._async_abort_if_configured(base_url, unique_id):
+            return result
         await self.async_set_unique_id(unique_id)
         self._abort_if_unique_id_configured()
         if not info.ssdp_location:
@@ -217,6 +276,8 @@ class Domus40ConfigFlow(ConfigFlow, domain=DOMAIN):
             except Domus40ConnectionError:
                 errors[CONF_HOST] = "invalid_host"
             else:
+                if result := self._async_abort_if_configured(base_url):
+                    return result
                 try:
                     await _validate(self, base_url, user_input)
                 except Domus40AuthError:
@@ -229,9 +290,8 @@ class Domus40ConfigFlow(ConfigFlow, domain=DOMAIN):
                 if not errors:
                     await self.async_set_unique_id(f"manual:{base_url.casefold()}")
                     self._abort_if_unique_id_configured()
-                    for entry in self._async_current_entries():
-                        if entry.data.get(CONF_BASE_URL) == base_url:
-                            return self.async_abort(reason="already_configured")
+                    if result := self._async_abort_if_configured(base_url):
+                        return result
                     return self.async_create_entry(
                         title="EFAPEL Domus40",
                         data={
@@ -261,12 +321,10 @@ class Domus40ConfigFlow(ConfigFlow, domain=DOMAIN):
         if not _is_domus40(discovery_info) or not discovery_info.ssdp_location:
             return self.async_abort(reason="not_domus40")
         unique_id = _unique_id(discovery_info)
+        base_url = base_url_from_location(discovery_info.ssdp_location)
+        if result := self._async_abort_if_configured(base_url, unique_id):
+            return result
         await self.async_set_unique_id(unique_id)
-        self._abort_if_unique_id_configured(
-            updates={
-                CONF_BASE_URL: base_url_from_location(discovery_info.ssdp_location)
-            }
-        )
         self._selected = discovery_info
         self.context["title_placeholders"] = {"name": _title(discovery_info)}
         return await self.async_step_confirm()

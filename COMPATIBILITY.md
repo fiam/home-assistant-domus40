@@ -71,6 +71,23 @@ English, Portuguese, and Spanish catalogs cover the same config-flow, options,
 error, abort, and integration-action keys; a structural contract test prevents
 language catalogs from drifting.
 
+The private SSDP UUID can change after a Home Server restart. Unreleased
+discovery matching checks the original config-entry identity, the last observed
+`server_udn`, then the normalized API origin. A matching origin allows the new
+discovery UUID to be remembered through Home Assistant's config-entry API while
+preserving the original entry unique ID and all derived registry identities.
+The remembered UUID can then follow a later address change. Simultaneous UUID
+and address changes cannot be linked automatically without another verified
+identity. Matching display names alone never merges hubs. Duplicate discovery,
+manual setup, and selected-server setup are checked before authentication;
+ignored discoveries are left unchanged. Sanitized regressions use the real
+config-entry manager in both exact Home Assistant images. Existing translated
+`already_configured` text is reused.
+Live acceptance on 2026.9.0 confirmed a changed advertised UUID at the configured
+origin, persistence of the new discovery alias through HA, removal of the
+duplicate discovery flow, and unchanged config-entry and entity-registry
+identities and options.
+
 ## Private contracts
 
 - Cookie and challenge authentication below `/HsAPI/authentication`.

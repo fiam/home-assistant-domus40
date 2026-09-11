@@ -18,6 +18,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Recognize a configured Home Server when its private SSDP UUID changes after a
+  restart. Preserve existing entity identities, remember the current discovery
+  UUID, and reject duplicate setup before authenticating again.
 - Reconnect MQTT only when unknown-message monitoring changes. Power sampling
   and identification options no longer interrupt the state listener.
 - Preserve the shared button-mapping task when power sampling is cancelled.
