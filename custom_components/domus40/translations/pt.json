@@ -53,11 +53,12 @@
   "options": {
     "step": {
       "init": {
-        "title": "Identificação e diagnóstico do protocolo",
-        "description": "Escolha durante quanto tempo os dispositivos piscam. A monitorização de mensagens desconhecidas observa temporariamente todos os tópicos MQTT do Home Server, mas guarda apenas formatos de tópicos anonimizados e assinaturas de campos/tipos protobuf nos diagnósticos; os tópicos e conteúdos originais nunca são registados.",
+        "title": "Medições de potência, identificação e diagnóstico",
+        "description": "Desative as medições de potência para reduzir o tráfego do Home Server, mantendo o controlo dos dispositivos e as atualizações de estado ativos. Os sensores de potência apresentarão um valor desconhecido. Escolha durante quanto tempo os dispositivos piscam. A monitorização de mensagens desconhecidas observa temporariamente todos os tópicos MQTT do Home Server, mas guarda apenas formatos de tópicos anonimizados e assinaturas de campos/tipos protobuf nos diagnósticos; os tópicos e conteúdos originais nunca são registados.",
         "data": {
           "identify_duration_seconds": "Duração da intermitência (segundos)",
-          "monitor_unknown_messages": "Monitorizar mensagens MQTT desconhecidas"
+          "monitor_unknown_messages": "Monitorizar mensagens MQTT desconhecidas",
+          "enable_metering": "Ativar medições de potência"
         }
       }
     }

@@ -6,8 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Add an **Enable power measurements** option to pause background power sampling
+  while device commands, state updates, and polling remain active. Disabling it
+  releases retained reporting leases and clears stale power values. English,
+  Portuguese, and Spanish translations are included.
+
 ### Fixed
 
+- Reconnect MQTT only when unknown-message monitoring changes. Power sampling
+  and identification options no longer interrupt the state listener.
+- Preserve the shared button-mapping task when power sampling is cancelled.
 - Preserve periodic polling and queued REST reconciliation during decoded
   state pushes and optimistic commands, so unrelated device traffic cannot
   leave a missed light update stuck indefinitely.

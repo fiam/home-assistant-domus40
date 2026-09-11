@@ -128,7 +128,13 @@ under **Settings → Devices & services → EFAPEL Domus40 → Configure**.
 ### Power measurements
 
 Every metering-capable logical row exposes an instantaneous power sensor in
-watts. The integration samples up to four logical devices for ten seconds,
+watts. To reduce Home Server traffic, turn off **Enable power measurements**
+under **Settings → Devices & services → EFAPEL Domus40 → Configure**. This stops
+background power sampling and releases active reporting streams; power sensors
+show an unknown value while device controls and state updates continue. The
+setting defaults to enabled and can be changed without reloading the integration.
+
+When enabled, the integration samples up to four logical devices for ten seconds,
 then pauses for thirty seconds before the next round-robin batch. Larger
 installations therefore receive less frequent power readings. Metering pauses
 while MQTT is disconnected, and failed batches or lease cleanup back off up to
@@ -143,6 +149,10 @@ power sensor when needed.
   can exchange SSDP multicast traffic, or use the manual LAN address flow.
 - If devices or mappings were changed in Domus40, use **Refresh inventory and
   mappings**.
+- If the Home Server becomes slow or misses state updates, temporarily turn off
+  **Enable power measurements** to compare behavior with less background traffic.
+  This helps isolate sampling load; it does not establish the cause of stale
+  readings already shown in the Domus40 app.
 - If push updates stop after a Home Server update, download diagnostics and
   inspect `schema_compatible`. A schema mismatch safely falls back to periodic
   REST refreshes instead of guessing at protobuf values. Decode warnings include

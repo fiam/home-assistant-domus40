@@ -29,6 +29,7 @@ from .api import (
 )
 from .const import (
     CONF_BASE_URL,
+    CONF_ENABLE_METERING,
     CONF_IDENTIFY_DURATION_SECONDS,
     CONF_MONITOR_UNKNOWN_MESSAGES,
     CONF_SERVER_UDN,
@@ -38,6 +39,7 @@ from .const import (
     MAX_IDENTIFY_DURATION_SECONDS,
     MIN_IDENTIFY_DURATION_SECONDS,
     identify_duration_seconds,
+    metering_enabled,
     monitor_unknown_messages,
 )
 
@@ -337,7 +339,7 @@ class Domus40OptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Configure the duration of identification LED requests."""
+        """Configure power sampling, identification, and diagnostics."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -345,6 +347,10 @@ class Domus40OptionsFlow(OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Required(
+                        CONF_ENABLE_METERING,
+                        default=metering_enabled(self.config_entry.options),
+                    ): bool,
                     vol.Required(
                         CONF_IDENTIFY_DURATION_SECONDS,
                         default=identify_duration_seconds(self.config_entry.options),

@@ -27,6 +27,7 @@ from .const import (
     MQTT_STATE_TOPIC,
     WALL_BUTTON_ENDPOINTS,
     identify_duration_seconds,
+    metering_enabled,
     monitor_unknown_messages,
 )
 from .models import Domus40ButtonBinding, Domus40Device, Domus40State
@@ -204,6 +205,10 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         self.client = client
         self._entry = entry
         self._session = session
+        options = entry.options if entry is not None else {}
+        self.metering_enabled = metering_enabled(options)
+        self._mqtt_monitoring_enabled = monitor_unknown_messages(options)
+        self._options_lock = asyncio.Lock()
         self._push_task: asyncio.Task[None] | None = None
         self._mqtt_connected = asyncio.Event()
         self._mqtt_disconnected = asyncio.Event()
@@ -404,7 +409,9 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         """Start metering after the one-time emitter mapping load completes."""
         state = self.data
         if (
-            self._reporting_task is not None
+            self._shutting_down
+            or self._reporting_task is not None
+            or (not self.metering_enabled and not self.reporting_active_ids)
             or not self.metering_schema_compatible
             or state is None
             or not state.metering_devices
@@ -418,7 +425,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         """Avoid competing with the initial scenario-discovery workload."""
         if self._binding_task is not None:
             try:
-                await self._binding_task
+                await asyncio.shield(self._binding_task)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -556,15 +563,43 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         return remove_listener
 
     async def async_options_updated(self) -> None:
-        """Reconnect MQTT so an observer-option change takes effect in place."""
-        if self._shutting_down or self.client.mqtt_info is None:
-            return
-        if self._push_task is not None and not self._push_task.done():
-            self._push_task.cancel()
-            await asyncio.gather(self._push_task, return_exceptions=True)
-        self._push_task = asyncio.create_task(
-            self._async_push_loop(), name=f"{DOMAIN}-mqtt"
-        )
+        """Apply sampling options without reconnecting unrelated state updates."""
+        async with self._options_lock:
+            if self._shutting_down:
+                return
+            enabled = metering_enabled(self._entry.options)
+            if enabled != self.metering_enabled:
+                self.metering_enabled = enabled
+                if not enabled:
+                    self.power_readings.clear()
+                    self.power_reading_recorded_at.clear()
+                    if self._power_expiry_handle is not None:
+                        self._power_expiry_handle.cancel()
+                        self._power_expiry_handle = None
+                    self.async_update_listeners()
+                if self._reporting_task is not None:
+                    self._reporting_task.cancel()
+                    await asyncio.gather(self._reporting_task, return_exceptions=True)
+                    self._reporting_task = None
+                # Retained leases must still be released while sampling is off.
+                # Cleanup uses the existing bounded retries in the reporting loop.
+                self.async_start_reporting()
+
+            monitoring = self.unknown_monitoring_enabled
+            if (
+                self._shutting_down
+                or monitoring == self._mqtt_monitoring_enabled
+                or self.client.mqtt_info is None
+            ):
+                return
+            self._mqtt_monitoring_enabled = monitoring
+            if self._push_task is not None and not self._push_task.done():
+                self._push_task.cancel()
+                await asyncio.gather(self._push_task, return_exceptions=True)
+            if not self._shutting_down:
+                self._push_task = asyncio.create_task(
+                    self._async_push_loop(), name=f"{DOMAIN}-mqtt"
+                )
 
     def _mqtt_topics(self) -> tuple[str, ...]:
         """Return either the known filters or one opt-in observation filter."""
@@ -588,7 +623,7 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
 
         async def activate(device_id: str) -> bool | None:
             async with semaphore:
-                if not self._mqtt_connected.is_set():
+                if not self.metering_enabled or not self._mqtt_connected.is_set():
                     return None
                 try:
                     topic = await self.client.async_activate_reporting(device_id)
@@ -615,11 +650,14 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
         batch_index = 0
         cooldown = REPORTING_COOLDOWN_SECONDS
         while True:
-            await self._mqtt_connected.wait()
+            if self.metering_enabled:
+                await self._mqtt_connected.wait()
+            elif not self.reporting_active_ids:
+                return
             failures = 0
             # A failed release keeps its slot until cleanup succeeds. Do not
             # accumulate leases on top of a batch the hub could not release.
-            if not self.reporting_active_ids:
+            if self.metering_enabled and not self.reporting_active_ids:
                 batch = batches[batch_index]
                 batch_index = (batch_index + 1) % len(batches)
                 results = await asyncio.gather(*(activate(item) for item in batch))
@@ -632,6 +670,8 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
                 *(deactivate(item) for item in tuple(self.reporting_active_ids))
             )
             self.async_update_listeners()
+            if not self.metering_enabled and not self.reporting_active_ids:
+                return
             cooldown = (
                 min(cooldown * 2, REPORTING_BACKOFF_MAX_SECONDS)
                 if failures or self.reporting_active_ids
@@ -864,7 +904,11 @@ class Domus40Coordinator(DataUpdateCoordinator[Domus40State]):
             self._record_unexpected_fields(
                 "instant-reading", payload, INSTANT_EVENT_FIELD_NUMBERS
             )
-            if not self.metering_schema_compatible or self.data is None:
+            if (
+                not self.metering_enabled
+                or not self.metering_schema_compatible
+                or self.data is None
+            ):
                 return
             try:
                 reading = decode_device_instant_reading_event(payload)

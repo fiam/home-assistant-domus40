@@ -53,11 +53,12 @@
   "options": {
     "step": {
       "init": {
-        "title": "Identification and protocol diagnostics",
-        "description": "Choose how long devices blink. Unknown-message monitoring temporarily observes all Home Server MQTT topics but stores only redacted topic shapes and protobuf field/wire signatures in diagnostics; raw topics and payloads are never logged.",
+        "title": "Power measurements, identification and diagnostics",
+        "description": "Disable power measurements to reduce Home Server traffic while keeping device controls and state updates active. Power sensors will show an unknown value. Choose how long devices blink. Unknown-message monitoring temporarily observes all Home Server MQTT topics but stores only redacted topic shapes and protobuf field/wire signatures in diagnostics; raw topics and payloads are never logged.",
         "data": {
           "identify_duration_seconds": "Blink duration (seconds)",
-          "monitor_unknown_messages": "Monitor unknown MQTT messages"
+          "monitor_unknown_messages": "Monitor unknown MQTT messages",
+          "enable_metering": "Enable power measurements"
         }
       }
     }

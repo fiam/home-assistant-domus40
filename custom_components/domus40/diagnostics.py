@@ -91,6 +91,7 @@ async def async_get_config_entry_diagnostics(
             ),
         },
         "metering": {
+            "enabled": coordinator.metering_enabled,
             "schema_compatible": coordinator.metering_schema_compatible,
             "instant_reading_fields": coordinator.metering_schema_fields,
             "reporting_active_count": len(coordinator.reporting_active_ids),

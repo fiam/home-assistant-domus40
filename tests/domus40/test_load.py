@@ -16,8 +16,10 @@ from aiohttp import web
 from homeassistant.core import HomeAssistant
 
 from custom_components.domus40.api import Domus40Client, Domus40ConnectionError
+from custom_components.domus40.const import CONF_ENABLE_METERING
 from custom_components.domus40.coordinator import Domus40Coordinator
 from custom_components.domus40.models import Domus40State, MqttInfo
+from custom_components.domus40.sensor import Domus40PowerSensor
 from domus40_emulator.server import PASSWORD, USERNAME, create_app
 
 
@@ -95,7 +97,6 @@ class HttpLoadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls["/HsAPI/users/valid"], 1)
         self.assertEqual(self.calls["/HsAPI/authentication"], 2)
 
-
 class MeteringLoadTests(unittest.IsolatedAsyncioTestCase):
     """Keep reporting work bounded even when the hub or MQTT is unavailable."""
 
@@ -126,6 +127,153 @@ class MeteringLoadTests(unittest.IsolatedAsyncioTestCase):
         self.coordinator.async_start_reporting()
         await asyncio.sleep(0.05)
         self.client.async_activate_reporting.assert_not_awaited()
+
+    async def test_disabled_metering_keeps_commands_and_state_push_working(self) -> None:
+        self.coordinator._entry.options = {CONF_ENABLE_METERING: False}
+        self.coordinator.schema_compatible = True
+        self.coordinator._set_push_connected(True)
+        with patch.object(self.coordinator, "_async_push_loop") as reconnect:
+            await self.coordinator.async_options_updated()
+            self.coordinator.async_start_reporting()
+            await self.coordinator.async_set_device_level("101", 42)
+            await self.coordinator._async_handle_push(
+                "fixture/events/device/101/state/changed",
+                b"\x0a\x00\x10\x65\xc8\x0c\x2a",
+            )
+            await self.coordinator.async_refresh()
+            await asyncio.sleep(0)
+            reconnect.assert_not_called()
+        self.assertIsNone(self.coordinator._reporting_task)
+        self.client.async_activate_reporting.assert_not_awaited()
+        self.client.async_set_level.assert_awaited_once_with("101", 42)
+        self.client.async_get_state.assert_awaited_once()
+        self.assertEqual(self.coordinator.data.devices["101"].level, 42)
+        self.assertEqual(self.coordinator.pending_write_count, 0)
+
+    async def test_disabling_releases_leases_clears_power_and_can_resume(self) -> None:
+        sampling = asyncio.Event()
+        original_sample = self.coordinator._async_wait_reporting_sample
+
+        async def sample():
+            sampling.set()
+            await original_sample()
+
+        entry = SimpleNamespace(
+            unique_id="fixture-server",
+            entry_id="fixture-entry",
+            runtime_data=SimpleNamespace(coordinator=self.coordinator),
+        )
+        sensor = Domus40PowerSensor(entry, self.coordinator.data.devices["101"])
+        readings = []
+        remove_listener = self.coordinator.async_add_listener(
+            lambda: readings.append(sensor.native_value)
+        )
+        self.coordinator._set_push_connected(True)
+        with (
+            patch.object(self.coordinator, "_async_wait_reporting_sample", sample),
+            patch.object(self.coordinator, "_async_push_loop") as reconnect,
+        ):
+            try:
+                self.coordinator.async_start_reporting()
+                await asyncio.wait_for(sampling.wait(), 1)
+                await self.coordinator._async_handle_push(
+                    "fixture/events/device/101/reading/instant",
+                    b"\x0a\x00\x10\x65\x60\xb9\x60",
+                )
+                self.assertEqual(readings[-1], 12.345)
+                self.coordinator._entry.options = {CONF_ENABLE_METERING: False}
+                await self.coordinator.async_options_updated()
+                await asyncio.wait_for(self.coordinator._reporting_task, 1)
+                self.assertEqual(readings[-1], None)
+                self.assertIsNone(self.coordinator._power_expiry_handle)
+                self.assertFalse(self.coordinator.reporting_active_ids)
+                self.assertEqual(self.client.async_deactivate_reporting.await_count, 3)
+                await self.coordinator._async_handle_push(
+                    "fixture/events/device/101/reading/instant",
+                    b"\x0a\x00\x10\x65\x60\xb9\x60",
+                )
+                self.assertIsNone(sensor.native_value)
+                self.assertEqual(self.client.async_activate_reporting.await_count, 3)
+
+                sampling.clear()
+                self.coordinator._entry.options = {CONF_ENABLE_METERING: True}
+                await self.coordinator.async_options_updated()
+                await asyncio.wait_for(sampling.wait(), 1)
+                self.assertEqual(self.client.async_activate_reporting.await_count, 6)
+                reconnect.assert_not_called()
+            finally:
+                remove_listener()
+
+    async def test_disabling_does_not_cancel_shared_button_mapping_load(self) -> None:
+        loading = asyncio.Event()
+
+        async def load():
+            loading.set()
+            await asyncio.Event().wait()
+
+        self.coordinator._binding_task = asyncio.create_task(load())
+        self.coordinator.async_start_reporting()
+        await asyncio.wait_for(loading.wait(), 1)
+        self.coordinator._entry.options = {CONF_ENABLE_METERING: False}
+        await self.coordinator.async_options_updated()
+        self.assertFalse(self.coordinator._binding_task.done())
+        self.assertIsNone(self.coordinator._reporting_task)
+        self.client.async_activate_reporting.assert_not_awaited()
+
+    async def test_disabled_cleanup_retries_without_mqtt_or_new_leases(self) -> None:
+        self.coordinator.metering_enabled = False
+        self.coordinator.reporting_active_ids = {"101"}
+        self.client.async_deactivate_reporting.side_effect = [
+            Domus40ConnectionError("Synthetic rejected cleanup"), None
+        ]
+        pauses = []
+
+        async def pause(delay):
+            pauses.append(delay)
+
+        with patch("custom_components.domus40.coordinator.asyncio.sleep", pause):
+            await self.coordinator._async_reporting_loop()
+        self.assertEqual(pauses, [60])
+        self.assertEqual(self.client.async_deactivate_reporting.await_count, 2)
+        self.client.async_activate_reporting.assert_not_awaited()
+        self.assertFalse(self.coordinator.reporting_active_ids)
+
+    async def test_disabling_releases_completed_part_of_an_activation_batch(self) -> None:
+        started = asyncio.Event()
+
+        async def activate(device_id):
+            if device_id != "101":
+                started.set()
+                await asyncio.Event().wait()
+            return f"fixture/events/device/{device_id}/reading/instant"
+
+        self.client.async_activate_reporting.side_effect = activate
+        self.coordinator._set_push_connected(True)
+        self.coordinator.async_start_reporting()
+        await asyncio.wait_for(started.wait(), 1)
+        self.coordinator._entry.options = {CONF_ENABLE_METERING: False}
+        await self.coordinator.async_options_updated()
+        await asyncio.wait_for(self.coordinator._reporting_task, 1)
+        self.client.async_deactivate_reporting.assert_awaited_once_with("101")
+        self.assertFalse(self.coordinator.reporting_active_ids)
+
+    async def test_metering_disabled_at_setup_never_starts_reporting(self) -> None:
+        entry = SimpleNamespace(
+            options={CONF_ENABLE_METERING: False}, async_on_unload=lambda _callback: None
+        )
+        coordinator = Domus40Coordinator(
+            HomeAssistant("/tmp/domus40-fixture"), entry, self.client, None
+        )
+        coordinator.data = _fixture_state()
+        coordinator.metering_schema_compatible = True
+        try:
+            coordinator.async_start_reporting()
+            await asyncio.sleep(0)
+            self.assertIsNone(coordinator._reporting_task)
+            self.assertFalse(coordinator.metering_enabled)
+            self.client.async_activate_reporting.assert_not_awaited()
+        finally:
+            await coordinator.async_shutdown()
 
     async def test_expired_command_stops_fast_retries_during_http_failure(self) -> None:
         self.client.async_get_state.side_effect = Domus40ConnectionError(

@@ -151,6 +151,12 @@ prefix, are:
 
 The metering filter remains subscribed while the MQTT connection is active;
 readings are emitted only for logical rows with active reporting leases.
+The `enable_metering` config-entry option controls the integration's lease
+acquisition. Disabling it cancels sampling, clears power readings, and retries
+release of retained leases with bounded backoff even if MQTT is disconnected.
+It preserves the state listener and REST polling; changing this option does not
+reauthenticate or reconnect MQTT. It does not disable the Home Server's own
+metering or reporting requested by other clients.
 Optional unknown-message monitoring replaces the known filters with `#` below
 the private prefix and retains only bounded, redacted topic shapes and protobuf
 field/wire signatures.

@@ -53,11 +53,12 @@
   "options": {
     "step": {
       "init": {
-        "title": "Identificación y diagnóstico del protocolo",
-        "description": "Elige durante cuánto tiempo parpadean los dispositivos. La monitorización de mensajes desconocidos observa temporalmente todos los temas MQTT del Home Server, pero solo guarda formatos de temas anonimizados y firmas de campos/tipos protobuf en los diagnósticos; los temas y contenidos originales nunca se registran.",
+        "title": "Mediciones de potencia, identificación y diagnóstico",
+        "description": "Desactiva las mediciones de potencia para reducir el tráfico del Home Server y mantener activos los controles de los dispositivos y las actualizaciones de estado. Los sensores de potencia mostrarán un valor desconocido. Elige durante cuánto tiempo parpadean los dispositivos. La monitorización de mensajes desconocidos observa temporalmente todos los temas MQTT del Home Server, pero solo guarda formatos de temas anonimizados y firmas de campos/tipos protobuf en los diagnósticos; los temas y contenidos originales nunca se registran.",
         "data": {
           "identify_duration_seconds": "Duración del parpadeo (segundos)",
-          "monitor_unknown_messages": "Monitorizar mensajes MQTT desconocidos"
+          "monitor_unknown_messages": "Monitorizar mensajes MQTT desconocidos",
+          "enable_metering": "Activar mediciones de potencia"
         }
       }
     }

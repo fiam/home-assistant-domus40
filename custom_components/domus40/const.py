@@ -7,6 +7,7 @@ from typing import Any
 DOMAIN = "domus40"
 
 CONF_BASE_URL = "base_url"
+CONF_ENABLE_METERING = "enable_metering"
 CONF_IDENTIFY_DURATION_SECONDS = "identify_duration_seconds"
 CONF_MONITOR_UNKNOWN_MESSAGES = "monitor_unknown_messages"
 CONF_SERVER_UDN = "server_udn"
@@ -24,6 +25,7 @@ IDENTIFY_DURATION_SECONDS = 30
 MIN_IDENTIFY_DURATION_SECONDS = 1
 MAX_IDENTIFY_DURATION_SECONDS = 30
 DEFAULT_MONITOR_UNKNOWN_MESSAGES = False
+DEFAULT_ENABLE_METERING = True
 REFRESH_INVENTORY_UNIQUE_ID_SUFFIX = "refresh-inventory"
 
 
@@ -44,6 +46,14 @@ def identify_duration_seconds(options: Mapping[str, Any]) -> int:
 def monitor_unknown_messages(options: Mapping[str, Any]) -> bool:
     """Return whether redacted unknown MQTT diagnostics are enabled."""
     value = options.get(CONF_MONITOR_UNKNOWN_MESSAGES, DEFAULT_MONITOR_UNKNOWN_MESSAGES)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def metering_enabled(options: Mapping[str, Any]) -> bool:
+    """Return whether background instantaneous power sampling is enabled."""
+    value = options.get(CONF_ENABLE_METERING, DEFAULT_ENABLE_METERING)
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)

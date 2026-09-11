@@ -25,6 +25,7 @@ from custom_components.domus40.button import (
 )
 from custom_components.domus40.config_flow import Domus40OptionsFlow
 from custom_components.domus40.const import (
+    CONF_ENABLE_METERING,
     CONF_IDENTIFY_DURATION_SECONDS,
     CONF_MONITOR_UNKNOWN_MESSAGES,
 )
@@ -363,11 +364,13 @@ class IdentificationOptionsTests(unittest.IsolatedAsyncioTestCase):
         schema = form["data_schema"]
         self.assertEqual(schema({})[CONF_IDENTIFY_DURATION_SECONDS], 30)
         self.assertFalse(schema({})[CONF_MONITOR_UNKNOWN_MESSAGES])
+        self.assertTrue(schema({})[CONF_ENABLE_METERING])
         self.assertEqual(
             schema({CONF_IDENTIFY_DURATION_SECONDS: "7"}),
             {
                 CONF_IDENTIFY_DURATION_SECONDS: 7,
                 CONF_MONITOR_UNKNOWN_MESSAGES: False,
+                CONF_ENABLE_METERING: True,
             },
         )
         with self.assertRaises(vol.Invalid):
@@ -375,6 +378,12 @@ class IdentificationOptionsTests(unittest.IsolatedAsyncioTestCase):
 
         saved = await flow.async_step_init({CONF_IDENTIFY_DURATION_SECONDS: 7})
         self.assertEqual(saved["data"], {CONF_IDENTIFY_DURATION_SECONDS: 7})
+
+        entry.options = {CONF_ENABLE_METERING: False}
+        form = await flow.async_step_init()
+        self.assertFalse(form["data_schema"]({})[CONF_ENABLE_METERING])
+        saved = await flow.async_step_init(form["data_schema"]({}))
+        self.assertFalse(saved["data"][CONF_ENABLE_METERING])
 
 
 if __name__ == "__main__":

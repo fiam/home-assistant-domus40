@@ -33,8 +33,9 @@ Reporting acceptance established that readings are attributed by logical
 `deviceId`, excessive concurrent leases can be rejected, and same-hardware rows
 must be separated across bounded round-robin batches to keep the Home Server
 responsive. Initial emitter mapping and metering must not run as
-high-concurrency workloads at the same time. Options reconnect MQTT through the
+high-concurrency workloads at the same time. Options apply through the
 config-entry update listener and do not require a full integration reload.
+Only changes to unknown-message monitoring reconnect MQTT.
 
 Logical actuator siblings are registered as separate linked Home Assistant
 devices because the Home Server may assign their channels to different
@@ -133,10 +134,22 @@ command expiry during an outage in the exact supported Home Assistant images.
 An emulator measurement with eight synthetic metering devices reduced steady
 lease traffic from about 94 to 12 HTTP requests per minute; an overlapping full
 refresh and metering batch peaked at two HTTP requests instead of five.
-No new user-interface translation keys are introduced; all three catalogs
-remain covered by the structural contract. Physical Home Server load acceptance
-is still pending before release; the emulator cannot establish hub capacity.
+The power-sampling option is translated into English, Portuguese, and Spanish;
+all three catalogs remain covered by the structural contract. Physical Home
+Server load acceptance is still pending before release; the emulator cannot
+establish hub capacity.
 The manifest and verified release baseline remain at 0.10.1 until release.
+
+The `enable_metering` config-entry option defaults to true to preserve existing
+installations. Disabling it cancels sampling, immediately clears power readings,
+and releases completed leases in the background, retaining failed releases for
+bounded retries even without MQTT. State decoding, commands, and periodic
+polling remain active. Re-enabling resumes bounded batches after retained leases
+are cleaned up. Cancelling sampling must not cancel the shared initial mapping
+task. Only changing the observer scope reconnects MQTT; metering and identify
+options preserve the current connection. Sanitized contracts cover disabled
+startup, live pause/resume, partial batches, cleanup failures, sensor
+notifications, and the native options form in both exact images.
 
 Partial state updates now notify coordinator listeners without resetting the
 periodic REST timer or cancelling queued refresh requests. Home Assistant's

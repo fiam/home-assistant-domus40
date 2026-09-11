@@ -50,6 +50,7 @@ def _push_coordinator(state: Domus40State) -> Domus40Coordinator:
     coordinator.data = state
     coordinator.schema_compatible = True
     coordinator.metering_schema_compatible = True
+    coordinator.metering_enabled = True
     coordinator._pending_levels = {}
     coordinator._recent_push_levels = {}
     coordinator._button_listeners = set()
@@ -256,6 +257,23 @@ class CoordinatorRefreshIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.coordinator.push_state_updates, 200)
         self.assertEqual(self.refresh_times, [])
         self.assertEqual(self.coordinator.data.devices["101"].level, 20)
+
+    async def test_only_monitor_option_reconnects_mqtt(self) -> None:
+        listener = asyncio.create_task(asyncio.Event().wait())
+        self.coordinator._push_task = listener
+        self.coordinator._entry.options = {"identify_duration_seconds": 7}
+        with patch.object(self.coordinator, "_async_push_loop", AsyncMock()) as reconnect:
+            await self.coordinator.async_options_updated()
+            self.assertIs(self.coordinator._push_task, listener)
+            self.assertFalse(listener.done())
+            reconnect.assert_not_called()
+            self.coordinator._entry.options["monitor_unknown_messages"] = True
+            await self.coordinator.async_options_updated()
+            await asyncio.sleep(0)
+            self.assertTrue(listener.cancelled())
+            reconnect.assert_awaited_once()
+            await self.coordinator.async_options_updated()
+            reconnect.assert_awaited_once()
 
     async def test_unrelated_push_traffic_does_not_starve_missed_state_poll(self) -> None:
         # The final light update was lost. Other devices still publish while
