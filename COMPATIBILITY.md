@@ -7,13 +7,13 @@ interfaces. A successful import is not sufficient proof of compatibility.
 
 | Contract | Verified value |
 | --- | --- |
-| Integration release | `0.10.1` |
+| Integration release | `0.11.0` |
 | Minimum supported Home Assistant Core | `2026.8.0` |
 | Latest verified Home Assistant Core | `2026.9.0` |
 | Home Assistant container Python | `3.14` |
 | Protocol schema revision | `domus40-events-v4` |
 | Discovery | SSDP plus manual LAN address fallback |
-| Entities | lights, blinds, outlets, power sensors, wall/IR events, identify actions; Área → Divisão maps to Floor → Area |
+| Entities | lights, momentary-output buttons, blinds, outlets, power sensors, wall/IR events, identify actions; Área → Divisão maps to Floor → Area |
 | Local state | 30-second polling plus MQTT-over-WebSocket state and metering push |
 
 The sanitized contract suite passes in both exact Home Assistant images above.
@@ -33,9 +33,10 @@ Reporting acceptance established that readings are attributed by logical
 `deviceId`, excessive concurrent leases can be rejected, and same-hardware rows
 must be separated across bounded round-robin batches to keep the Home Server
 responsive. Initial emitter mapping and metering must not run as
-high-concurrency workloads at the same time. Options apply through the
-config-entry update listener and do not require a full integration reload.
-Only changes to unknown-message monitoring reconnect MQTT.
+high-concurrency workloads at the same time. Metering, identification, and diagnostic options apply through the config-entry
+update listener without a full integration reload. Changing the momentary-output
+selection reloads the entry to rebuild entity platforms. Among options applied
+without a reload, only unknown-message monitoring reconnects MQTT.
 
 Logical actuator siblings are registered as separate linked Home Assistant
 devices because the Home Server may assign their channels to different
@@ -71,7 +72,7 @@ English, Portuguese, and Spanish catalogs cover the same config-flow, options,
 error, abort, and integration-action keys; a structural contract test prevents
 language catalogs from drifting.
 
-The private SSDP UUID can change after a Home Server restart. Unreleased
+The private SSDP UUID can change after a Home Server restart. Version 0.11.0
 discovery matching checks the original config-entry identity, the last observed
 `server_udn`, then the normalized API origin. A matching origin allows the new
 discovery UUID to be remembered through Home Assistant's config-entry API while
@@ -87,6 +88,41 @@ Live acceptance on 2026.9.0 confirmed a changed advertised UUID at the configure
 origin, persistence of the new discovery alias through HA, removal of the
 duplicate discovery flow, and unchanged config-entry and entity-registry
 identities and options.
+
+## Momentary outputs (`0.11.0`)
+
+Momentary classification is an explicit config-entry option per logical
+on/off relay channel. Read-only inspection of the current private
+`/devices/getDevices` and `/devices/{id}` responses found no pulse-mode or
+pulse-duration field; category and icon are user-selected presentation values.
+No new private command contract is assumed: a press uses the existing ON
+command, and requires a module already configured to release automatically.
+It does not report door position or synthesize OFF commands.
+
+Changing the selection reloads the entry. Native entity-registry APIs create
+the replacement button/light, copy user presentation and placement metadata,
+and remove the old entity. Home Assistant does not allow changing an existing
+entity ID across domains. Names and identifiers of live devices are not used
+as classification heuristics. Existing metering and identification options
+continue to apply without a reload when the selection is unchanged.
+
+Version `0.11.0` includes the previously deployed discovery, diagnostics, and
+load-control changes described here. Home Assistant versions remain unchanged.
+
+`task check` passes 99 synthetic tests in each exact Home Assistant image
+(`2026.8.0` and `2026.9.0`), plus lint and commit-message validation.
+Regressions exercise native registry migration in both directions, retention
+of user customizations, independent relay siblings, repeated single-command
+presses, options persistence, and reload selection. Physical pulse behavior
+has not been exercised by these tests.
+
+Read-only live acceptance on `2026.9.0` confirmed the local source fingerprint,
+successful coordinator refresh, connected MQTT, compatible state schema, and
+the native options selector. The flow was cancelled without changing the
+empty selection; the agent sent no physical commands during acceptance.
+The owner subsequently selected the affected outputs and confirmed successful
+physical operation of the momentary controls. This establishes momentary-output
+acceptance; it does not establish sustained metering capacity.
 
 ## Private contracts
 
@@ -126,9 +162,9 @@ Assistant's coordinator cleanup to cancel scheduled refreshes. The existing
 English, Portuguese, and Spanish catalogs still pass the structural contract;
 this patch introduces no new user-interface translation keys.
 
-## Unreleased load controls
+## Load controls (`0.11.0`)
 
-Unreleased changes reduce reporting batches from eight to four logical devices
+Version 0.11.0 reduces reporting batches from eight to four logical devices
 and add a thirty-second pause after each ten-second sample.
 Failed batches or cleanup double the pause to at most five minutes. Cleanup
 failures retain their lease slots until release succeeds. Metering waits for a
@@ -153,9 +189,9 @@ lease traffic from about 94 to 12 HTTP requests per minute; an overlapping full
 refresh and metering batch peaked at two HTTP requests instead of five.
 The power-sampling option is translated into English, Portuguese, and Spanish;
 all three catalogs remain covered by the structural contract. Physical Home
-Server load acceptance is still pending before release; the emulator cannot
-establish hub capacity.
-The manifest and verified release baseline remain at 0.10.1 until release.
+Server sustained-load acceptance remains incomplete; the emulator cannot
+establish hub capacity. The owner-confirmed momentary-output acceptance does
+not extend the metering validation claims.
 
 The `enable_metering` config-entry option defaults to true to preserve existing
 installations. Disabling it cancels sampling, immediately clears power readings,

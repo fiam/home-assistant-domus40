@@ -21,6 +21,7 @@ from .const import (
     PLATFORMS,
     REFRESH_INVENTORY_UNIQUE_ID_SUFFIX,
     WALL_BUTTON_ENDPOINTS,
+    momentary_outputs,
 )
 from .coordinator import Domus40Coordinator
 from .locations import ensure_location_hierarchy, sync_device_registry
@@ -35,6 +36,7 @@ class Domus40RuntimeData:
 
     coordinator: Domus40Coordinator
     session: aiohttp.ClientSession
+    momentary_output_ids: frozenset[str] = frozenset()
 
 
 type Domus40ConfigEntry = ConfigEntry[Domus40RuntimeData]
@@ -64,8 +66,50 @@ def _device_entity_unique_ids(
 async def _async_update_listener(
     hass: HomeAssistant, entry: Domus40ConfigEntry
 ) -> None:
-    """Apply options without rebuilding inventory and emitter mappings."""
+    """Rebuild entity platforms only when output classification changes."""
+    if momentary_outputs(entry.options) != entry.runtime_data.momentary_output_ids:
+        await hass.config_entries.async_reload(entry.entry_id)
+        return
     await entry.runtime_data.coordinator.async_options_updated()
+
+
+def _migrate_output_domains(hass: HomeAssistant, entry: Domus40ConfigEntry) -> None:
+    """Replace a relay's entity domain while preserving user customizations."""
+    registry = er.async_get(hass)
+    selected = momentary_outputs(entry.options)
+    server_id = entry.unique_id or entry.entry_id
+    for device in entry.runtime_data.coordinator.data.devices.values():
+        if not device.supports_momentary_output:
+            continue
+        domain = "button" if device.device_id in selected else "light"
+        previous_domain = "light" if domain == "button" else "button"
+        unique_id = f"{server_id}-{device.device_id}"
+        previous_id = registry.async_get_entity_id(previous_domain, DOMAIN, unique_id)
+        if previous_id is None:
+            continue
+        previous = registry.async_get(previous_id)
+        if previous.config_entry_id != entry.entry_id:
+            continue
+        if registry.async_get_entity_id(domain, DOMAIN, unique_id) is None:
+            replacement = registry.async_get_or_create(
+                domain, DOMAIN, unique_id,
+                suggested_object_id=previous.entity_id.split(".", 1)[1],
+                config_entry=entry,
+                device_id=previous.device_id,
+                disabled_by=previous.disabled_by,
+                hidden_by=previous.hidden_by,
+            )
+            registry.async_update_entity(
+                replacement.entity_id,
+                name=previous.name,
+                icon=previous.icon,
+                area_id=previous.area_id,
+                labels=previous.labels,
+                aliases=previous.aliases,
+                categories=previous.categories,
+            )
+        registry.async_remove(previous_id)
+        hass.states.async_remove(previous_id)
 
 
 def _expected_registry_unique_ids(
@@ -199,7 +243,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: Domus40ConfigEntry) -> b
     coordinator = Domus40Coordinator(hass, entry, client, session)
     await coordinator.async_config_entry_first_refresh()
     coordinator.initialize_button_bindings()
-    entry.runtime_data = Domus40RuntimeData(coordinator, session)
+    entry.runtime_data = Domus40RuntimeData(
+        coordinator, session, momentary_outputs(entry.options)
+    )
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     assert coordinator.data is not None
@@ -207,6 +253,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: Domus40ConfigEntry) -> b
         hass, coordinator.data
     )
     moved_entities = _split_grouped_logical_devices(hass, entry, coordinator)
+    _migrate_output_domains(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     device_registry_stats = sync_device_registry(
         hass,

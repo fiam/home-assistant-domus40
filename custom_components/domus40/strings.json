@@ -59,7 +59,11 @@
         "data": {
           "identify_duration_seconds": "Blink duration (seconds)",
           "monitor_unknown_messages": "Monitor unknown MQTT messages",
-          "enable_metering": "Enable power measurements"
+          "enable_metering": "Enable power measurements",
+          "momentary_outputs": "Momentary outputs (hardware pulse)"
+        },
+        "data_description": {
+          "momentary_outputs": "Select only relay outputs already configured to pulse and release automatically in the hardware. Each press sends one ON command. Changing this selection reloads the integration and replaces light entities with button entities (or vice versa); update dashboards and automations that use the old entity IDs."
         }
       }
     }

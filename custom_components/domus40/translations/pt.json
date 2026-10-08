@@ -58,7 +58,11 @@
         "data": {
           "identify_duration_seconds": "Duração da intermitência (segundos)",
           "monitor_unknown_messages": "Monitorizar mensagens MQTT desconhecidas",
-          "enable_metering": "Ativar medições de potência"
+          "enable_metering": "Ativar medições de potência",
+          "momentary_outputs": "Saídas momentâneas (impulso no aparelho)"
+        },
+        "data_description": {
+          "momentary_outputs": "Selecione apenas saídas de relé já configuradas no aparelho para gerar um impulso e desligar automaticamente. Cada pressão envia um comando de ligar. Alterar esta seleção recarrega a integração e substitui entidades de luz por botões (ou vice-versa); atualize os painéis e automações que utilizam os IDs anteriores."
         }
       }
     }

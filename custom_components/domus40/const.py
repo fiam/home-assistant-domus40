@@ -8,6 +8,7 @@ DOMAIN = "domus40"
 
 CONF_BASE_URL = "base_url"
 CONF_ENABLE_METERING = "enable_metering"
+CONF_MOMENTARY_OUTPUTS = "momentary_outputs"
 CONF_IDENTIFY_DURATION_SECONDS = "identify_duration_seconds"
 CONF_MONITOR_UNKNOWN_MESSAGES = "monitor_unknown_messages"
 CONF_SERVER_UDN = "server_udn"
@@ -27,6 +28,14 @@ MAX_IDENTIFY_DURATION_SECONDS = 30
 DEFAULT_MONITOR_UNKNOWN_MESSAGES = False
 DEFAULT_ENABLE_METERING = True
 REFRESH_INVENTORY_UNIQUE_ID_SUFFIX = "refresh-inventory"
+
+
+def momentary_outputs(options: Mapping[str, Any]) -> frozenset[str]:
+    """Return explicitly selected logical outputs, never infer from names."""
+    value = options.get(CONF_MOMENTARY_OUTPUTS, [])
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(item for item in value if isinstance(item, str))
 
 
 def identify_duration_seconds(options: Mapping[str, Any]) -> int:

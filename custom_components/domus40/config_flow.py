@@ -20,6 +20,7 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 from homeassistant.helpers.service_info.ssdp import SsdpServiceInfo
 
 from .api import (
@@ -33,6 +34,7 @@ from .const import (
     CONF_BASE_URL,
     CONF_ENABLE_METERING,
     CONF_IDENTIFY_DURATION_SECONDS,
+    CONF_MOMENTARY_OUTPUTS,
     CONF_MONITOR_UNKNOWN_MESSAGES,
     CONF_SERVER_UDN,
     DISCOVERY_ST,
@@ -42,6 +44,7 @@ from .const import (
     MIN_IDENTIFY_DURATION_SECONDS,
     identify_duration_seconds,
     metering_enabled,
+    momentary_outputs,
     monitor_unknown_messages,
 )
 
@@ -397,14 +400,38 @@ class Domus40OptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Configure power sampling, identification, and diagnostics."""
+        """Configure power sampling, momentary outputs, and diagnostics."""
+        runtime = getattr(self.config_entry, "runtime_data", None)
+        state = runtime.coordinator.data if runtime is not None else None
+        selected = momentary_outputs(self.config_entry.options)
+        devices = state.devices if state is not None else {}
+        choices = [
+            {"value": device.device_id, "label": " · ".join(
+                part for part in (device.floor_name, device.division_name, device.name)
+                if part
+            )}
+            for device in sorted(devices.values(), key=lambda device: device.name)
+            if device.supports_momentary_output
+        ]
+        # Keep saved choices available if an output is temporarily missing.
+        choices.extend(
+            {"value": device_id, "label": device_id}
+            for device_id in sorted(selected - {choice["value"] for choice in choices})
+        )
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            return self.async_create_entry(
+                title="", data={**self.config_entry.options, **user_input}
+            )
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Optional(
+                        CONF_MOMENTARY_OUTPUTS, default=sorted(selected)
+                    ): SelectSelector(SelectSelectorConfig(
+                        options=choices, multiple=True, mode="dropdown"
+                    )),
                     vol.Required(
                         CONF_ENABLE_METERING,
                         default=metering_enabled(self.config_entry.options),

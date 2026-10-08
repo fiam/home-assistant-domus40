@@ -1,4 +1,4 @@
-"""Identification buttons for EFAPEL Domus40 devices."""
+"""Momentary output and identification buttons for EFAPEL Domus40 devices."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import Domus40ConfigEntry
-from .const import REFRESH_INVENTORY_UNIQUE_ID_SUFFIX
+from .const import REFRESH_INVENTORY_UNIQUE_ID_SUFFIX, momentary_outputs
 from .entity import Domus40Entity
 from .models import Domus40Device
 
@@ -20,12 +20,25 @@ async def async_setup_entry(
     """Set up inventory refresh and identification actions."""
     state = entry.runtime_data.coordinator.data
     entities: list[ButtonEntity] = [Domus40RefreshInventoryButton(hass, entry)]
+    selected = momentary_outputs(entry.options)
     for device in state.devices.values():
+        if device.supports_momentary_output and device.device_id in selected:
+            entities.append(Domus40MomentaryButton(entry, device))
         if device.supports_button_events or device.supports_receiver_identify:
             entities.append(Domus40DirectIdentifyButton(entry, device))
         if device.supports_receiver_identify:
             entities.append(Domus40AssociatedIdentifyButton(entry, device))
     async_add_entities(entities)
+
+
+class Domus40MomentaryButton(Domus40Entity, ButtonEntity):
+    """Trigger a relay whose pulse duration is configured in the hardware."""
+
+    _attr_icon = "mdi:gesture-tap-button"
+
+    async def async_press(self) -> None:
+        """Send one ON command; the module owns the automatic release."""
+        await self.async_set_domus_level(100)
 
 
 class Domus40RefreshInventoryButton(ButtonEntity):

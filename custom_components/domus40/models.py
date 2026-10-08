@@ -150,6 +150,15 @@ class Domus40Device:
     ha_area_name: str | None = None
 
     @property
+    def supports_momentary_output(self) -> bool:
+        """Return whether an explicit hardware-pulse override is appropriate."""
+        return (
+            self.device_type in {"OnOffCommuter", "OnOffCommuter2"}
+            and self.supports_on_off
+            and not self.supports_level
+        )
+
+    @property
     def supports_entity(self) -> bool:
         """Return whether this endpoint row represents an actionable output."""
         if self.device_type == TYPE_BLINDS:

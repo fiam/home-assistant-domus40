@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import Domus40ConfigEntry
-from .const import TYPE_DIMMER, TYPE_LIGHTS
+from .const import TYPE_DIMMER, TYPE_LIGHTS, momentary_outputs
 from .entity import Domus40Entity
 
 
@@ -20,10 +20,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up all discovered lighting actuators."""
     devices = entry.runtime_data.coordinator.data.devices.values()
+    selected = momentary_outputs(entry.options)
     async_add_entities(
         Domus40Light(entry, device)
         for device in devices
         if device.device_type in TYPE_LIGHTS and device.supports_entity
+        and not (device.supports_momentary_output and device.device_id in selected)
     )
 
 

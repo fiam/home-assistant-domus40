@@ -72,12 +72,33 @@ used.
 The setup flow, options, and integration actions are translated into English,
 Portuguese, and Spanish.
 
+## Momentary door and gate outputs
+
+Available from version **0.11.0**. Under
+**Settings → Devices & services → EFAPEL Domus40 → Configure**, select
+**Momentary outputs (hardware pulse)** for relay channels already configured
+to pulse and release automatically in the module. Each button press sends one
+ON command using the existing output API. The integration does not configure
+the module's pulse duration or generate a timed OFF command.
+
+The inspected private inventory and single-device responses do not expose
+a momentary-mode setting. User-selected categories and icons are hints about
+the connected load, not proof of pulse behavior, so classification is explicit
+and defaults to the existing light behavior.
+
+Changing the selection reloads the integration and replaces `light.*` entities
+with `button.*` entities, or reverses that change when deselected. Custom names,
+icons, areas, labels, aliases, and disabled/hidden choices are carried across;
+dashboards and automations referencing old entity IDs need updating. The
+button records a press, not the door's position. A separate position/contact
+sensor is needed to represent open/closed state reliably.
+
 ## Supported devices and entities
 
 | Domus40 capability or type | Home Assistant entity |
 | --- | --- |
 | `LightingRegulator` | Dimmable `light` |
-| `OnOffCommuter`, `OnOffCommuter2` | `light` |
+| `OnOffCommuter`, `OnOffCommuter2` | `light`, or `button` for selected hardware pulse outputs |
 | `BlindsControl` | Position-aware `cover` |
 | `Plug`, `PlugSocket`, `PlugWall` | `switch` |
 | Four-button emitter, including `QuadPressureButton` | Four `event` entities, Key A–D |

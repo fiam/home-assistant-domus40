@@ -27,6 +27,7 @@ from custom_components.domus40.config_flow import Domus40OptionsFlow
 from custom_components.domus40.const import (
     CONF_ENABLE_METERING,
     CONF_IDENTIFY_DURATION_SECONDS,
+    CONF_MOMENTARY_OUTPUTS,
     CONF_MONITOR_UNKNOWN_MESSAGES,
 )
 from custom_components.domus40.coordinator import Domus40Coordinator
@@ -65,6 +66,7 @@ class IdentificationEntityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.coordinator = _FakeCoordinator(self.state)
         self.entry = SimpleNamespace(
+            options={},
             unique_id="fixture-server",
             entry_id="fixture-entry",
             runtime_data=SimpleNamespace(coordinator=self.coordinator),
@@ -371,6 +373,7 @@ class IdentificationOptionsTests(unittest.IsolatedAsyncioTestCase):
                 CONF_IDENTIFY_DURATION_SECONDS: 7,
                 CONF_MONITOR_UNKNOWN_MESSAGES: False,
                 CONF_ENABLE_METERING: True,
+                CONF_MOMENTARY_OUTPUTS: [],
             },
         )
         with self.assertRaises(vol.Invalid):

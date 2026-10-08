@@ -58,7 +58,11 @@
         "data": {
           "identify_duration_seconds": "Duración del parpadeo (segundos)",
           "monitor_unknown_messages": "Monitorizar mensajes MQTT desconocidos",
-          "enable_metering": "Activar mediciones de potencia"
+          "enable_metering": "Activar mediciones de potencia",
+          "momentary_outputs": "Salidas momentáneas (pulso en el dispositivo)"
+        },
+        "data_description": {
+          "momentary_outputs": "Seleccione solo salidas de relé ya configuradas en el dispositivo para generar un pulso y desactivarse automáticamente. Cada pulsación envía una orden de encendido. Cambiar esta selección recarga la integración y sustituye entidades de luz por botones (o viceversa); actualice los paneles y automatizaciones que utilicen los IDs anteriores."
         }
       }
     }
